@@ -7,7 +7,6 @@ st.set_page_config(layout="wide")
 
 st.title("Rebuild Analytics Platform V6")
 
-
 # ---------- Inputs ----------
 rebuild_file = st.file_uploader("Upload Rebuild File", type=["xlsx"])
 
@@ -22,6 +21,12 @@ start_year = st.number_input("Start Year", 2010, 2030, 2016)
 end_year = st.number_input("End Year", 2010, 2030, 2026)
 base_year = st.number_input("Base Year", 2010, 2030, 2026)
 
+rebuild_filter = st.multiselect(
+    "Filter Rebuild Types",
+    options=['CMR', 'CPT+H', 'CPT-O'],
+    default=['CMR', 'CPT+H', 'CPT-O']
+)
+
 run = st.button("Run Analysis")
 
 
@@ -34,14 +39,17 @@ def generate_insights(df, summary):
             cmr = summary.loc[summary['CCR TYPE'] == 'CMR', 'Avg_Cost'].values[0]
             cpth = summary.loc[summary['CCR TYPE'] == 'CPT+H', 'Avg_Cost'].values[0]
             diff = ((cpth - cmr) / cmr) * 100 if cmr else 0
-            insights.append(f"CPT+H is {diff:.1f}% vs CMR baseline")
+
+            insights.append(
+                f"CPT+H average cost is {diff:.1f}% higher than CMR, indicating potential cost inefficiency"
+            )
     except:
         pass
 
     try:
         high_var = df.groupby('CCR TYPE')['Adj Cost'].std().sort_values(ascending=False)
         if len(high_var) > 0:
-            insights.append(f"Highest cost variability in {high_var.index[0]}")
+            insights.append(f"Highest cost variability observed in {high_var.index[0]}")
     except:
         pass
 
@@ -68,13 +76,14 @@ if run and rebuild_file:
 
     df = pd.concat(frames, ignore_index=True)
 
-    # ✅ HARD GUARANTEE CCR TYPE EXISTS
     if 'CCR TYPE' not in df.columns:
         df['CCR TYPE'] = 'UNKNOWN'
 
+    # ---------- Filter by Rebuild Type ----------
+    df = df[df['CCR TYPE'].isin(rebuild_filter)]
+
     # ---------- Dates ----------
     df['Service Date'] = df['DELIVERED DATE'].fillna(df['ENROLL DATE']).fillna(df['IN SERVICE DATE'])
-
     df['Service Year'] = pd.to_datetime(df['Service Date'], errors='coerce').dt.year
 
     df = df[(df['Service Year'] >= start_year) & (df['Service Year'] <= end_year)]
@@ -119,7 +128,7 @@ if run and rebuild_file:
 
     df = df[df['Adj Cost'] > 0]
 
-    # ---------- Safe Outliers ----------
+    # ---------- Outlier Detection ----------
     df['Outlier'] = False
 
     for (m, t), g in df.groupby(['SALES MODEL', 'CCR TYPE']):
@@ -135,12 +144,7 @@ if run and rebuild_file:
             mask = (log_vals < low) | (log_vals > high)
             df.loc[idx, 'Outlier'] = mask
 
-    # ---------- Valid ----------
     valid = df[df['Outlier'] == False].copy()
-
-    # ✅ GUARANTEE CCR TYPE EXISTS AFTER TRANSFORM
-    if 'CCR TYPE' not in valid.columns:
-        valid['CCR TYPE'] = 'UNKNOWN'
 
     # ---------- Summary ----------
     summary = valid.groupby('CCR TYPE', dropna=False).agg(
@@ -158,27 +162,37 @@ if run and rebuild_file:
     # ---------- Dashboard ----------
     with tab1:
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         col1.metric("Total Rows", len(valid))
         col2.metric("Outliers", int(df['Outlier'].sum()))
         col3.metric("Avg Cost", f"${int(valid['Adj Cost'].mean()):,}" if len(valid) else "$0")
 
+        if 'CMR' in summary['CCR TYPE'].values and 'CPT+H' in summary['CCR TYPE'].values:
+            cmr = summary.loc[summary['CCR TYPE']=='CMR','Avg_Cost'].values[0]
+            cpth = summary.loc[summary['CCR TYPE']=='CPT+H','Avg_Cost'].values[0]
+            delta = ((cpth - cmr)/cmr)*100 if cmr else 0
+            col4.metric("CPT+H vs CMR (%)", f"{delta:.1f}%")
+
         st.dataframe(summary)
 
-        st.subheader("SMU vs Cost")
+        # ✅ Combined Scatter
+        st.subheader("SMU vs Cost (All Rebuild Types)")
 
-        for t in valid['CCR TYPE'].dropna().unique():
-            subset = valid[valid['CCR TYPE'] == t]
+        chart_data = valid[['SMU AT REBUILD', 'Adj Cost', 'CCR TYPE']].dropna()
+        chart_data = chart_data.rename(columns={
+            'SMU AT REBUILD': 'SMU',
+            'Adj Cost': 'Cost'
+        })
 
-            chart_df = subset[['SMU AT REBUILD', 'Adj Cost']].rename(
-                columns={'SMU AT REBUILD': 'SMU', 'Adj Cost': 'Cost'}
-            )
+        st.scatter_chart(
+            chart_data,
+            x='SMU',
+            y='Cost',
+            color='CCR TYPE'
+        )
 
-            st.write(f"### {t}")
-            st.scatter_chart(chart_df)
-
-    # ---------- Machine ----------
+    # ---------- Machine Detail ----------
     with tab2:
 
         machines = valid['SALES MODEL'].dropna().unique()
@@ -190,15 +204,14 @@ if run and rebuild_file:
 
             st.dataframe(dfm.head(50))
 
-            for t in dfm['CCR TYPE'].unique():
-                subset = dfm[dfm['CCR TYPE'] == t]
+            st.subheader("Machine Chart")
 
-                chart_df = subset[['SMU AT REBUILD', 'Adj Cost']].rename(
-                    columns={'SMU AT REBUILD': 'SMU', 'Adj Cost': 'Cost'}
-                )
+            chart_df = dfm[['SMU AT REBUILD', 'Adj Cost', 'CCR TYPE']].rename(
+                columns={'SMU AT REBUILD': 'SMU', 'Adj Cost': 'Cost'}
+            )
 
-                st.write(f"### {t}")
-                st.scatter_chart(chart_df)
+            st.scatter_chart(chart_df, x='SMU', y='Cost', color='CCR TYPE')
+
         else:
             st.warning("No machine data")
 
@@ -209,11 +222,9 @@ if run and rebuild_file:
 
     # ---------- Insights ----------
     with tab4:
-        if insights:
-            for i in insights:
-                st.write("•", i)
-        else:
-            st.write("No insights generated")
+        st.subheader("Auto Insights")
+        for i in insights:
+            st.write("•", i)
 
     # ---------- Export ----------
     output = BytesIO()
@@ -223,7 +234,9 @@ if run and rebuild_file:
 
         for m in valid['SALES MODEL'].dropna().unique():
             valid[valid['SALES MODEL'] == m].to_excel(
-                writer, sheet_name=str(m)[:31], index=False
+                writer,
+                sheet_name=str(m)[:31],
+                index=False
             )
 
     st.download_button(
