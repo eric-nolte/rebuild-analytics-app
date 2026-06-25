@@ -5,7 +5,11 @@ from io import BytesIO
 
 st.set_page_config(layout="wide")
 
-st.title("Rebuild Analytics Platform V6")
+st.title("Rebuild Analytics Platform V6+")
+
+# ---------- SESSION STATE FIX ----------
+if "run_clicked" not in st.session_state:
+    st.session_state.run_clicked = False
 
 # ---------- Inputs ----------
 rebuild_file = st.file_uploader("Upload Rebuild File", type=["xlsx"])
@@ -27,36 +31,11 @@ rebuild_filter = st.multiselect(
     default=['CMR', 'CPT+H', 'CPT-O']
 )
 
-run = st.button("Run Analysis")
+if st.button("Run Analysis"):
+    st.session_state.run_clicked = True
 
-
-# ---------- Insights ----------
-def generate_insights(df, summary):
-    insights = []
-
-    try:
-        if 'CMR' in summary['CCR TYPE'].values and 'CPT+H' in summary['CCR TYPE'].values:
-            cmr = summary.loc[summary['CCR TYPE'] == 'CMR', 'Avg_Cost'].values[0]
-            cpth = summary.loc[summary['CCR TYPE'] == 'CPT+H', 'Avg_Cost'].values[0]
-            diff = ((cpth - cmr) / cmr) * 100 if cmr else 0
-
-            insights.append(
-                f"CPT+H average cost is {diff:.1f}% higher than CMR, indicating potential cost inefficiency"
-            )
-    except:
-        pass
-
-    try:
-        high_var = df.groupby('CCR TYPE')['Adj Cost'].std().sort_values(ascending=False)
-        if len(high_var) > 0:
-            insights.append(f"Highest cost variability observed in {high_var.index[0]}")
-    except:
-        pass
-
-    return insights
-
-
-if run and rebuild_file:
+# ---------- Run ----------
+if st.session_state.run_clicked and rebuild_file:
 
     rebuild = pd.read_excel(rebuild_file, sheet_name=None)
 
@@ -76,10 +55,6 @@ if run and rebuild_file:
 
     df = pd.concat(frames, ignore_index=True)
 
-    if 'CCR TYPE' not in df.columns:
-        df['CCR TYPE'] = 'UNKNOWN'
-
-    # ---------- Filter by Rebuild Type ----------
     df = df[df['CCR TYPE'].isin(rebuild_filter)]
 
     # ---------- Dates ----------
@@ -92,6 +67,12 @@ if run and rebuild_file:
     if machine_input:
         machines = [m.strip() for m in machine_input.split(',')]
         df = df[df['SALES MODEL'].isin(machines)]
+
+    # ---------- Dealer + Region Extraction ----------
+    df['Dealer Code'] = df['DEALER'].astype(str).str.extract(r'([A-Z]\d{3})')
+
+    # Simple region logic (customize later if needed)
+    df['Region'] = df['Dealer Code'].str[0]
 
     # ---------- Rates ----------
     if use_default or not rate_file:
@@ -128,12 +109,10 @@ if run and rebuild_file:
 
     df = df[df['Adj Cost'] > 0]
 
-    # ---------- Outlier Detection ----------
+    # ---------- Outliers ----------
     df['Outlier'] = False
 
     for (m, t), g in df.groupby(['SALES MODEL', 'CCR TYPE']):
-        idx = g.index
-
         if len(g) >= 5:
             log_vals = np.log(g['Adj Cost'])
             q1, q3 = np.percentile(log_vals, [25, 75])
@@ -142,101 +121,97 @@ if run and rebuild_file:
             low, high = q1 - mult * iqr, q3 + mult * iqr
 
             mask = (log_vals < low) | (log_vals > high)
-            df.loc[idx, 'Outlier'] = mask
+            df.loc[g.index, 'Outlier'] = mask
 
     valid = df[df['Outlier'] == False].copy()
 
     # ---------- Summary ----------
-    summary = valid.groupby('CCR TYPE', dropna=False).agg(
+    summary = valid.groupby('CCR TYPE').agg(
         Avg_Cost=('Adj Cost', 'mean'),
         Count=('Adj Cost', 'count')
     ).reset_index()
 
-    insights = generate_insights(valid, summary)
-
     # ---------- Tabs ----------
     tab1, tab2, tab3, tab4 = st.tabs(
-        ["Dashboard", "Machine Detail", "Exceptions", "Insights"]
+        ["Dashboard", "Machine Detail", "Dealer/Region", "Exceptions"]
     )
 
     # ---------- Dashboard ----------
     with tab1:
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        col1.metric("Total Rows", len(valid))
-        col2.metric("Outliers", int(df['Outlier'].sum()))
-        col3.metric("Avg Cost", f"${int(valid['Adj Cost'].mean()):,}" if len(valid) else "$0")
-
-        if 'CMR' in summary['CCR TYPE'].values and 'CPT+H' in summary['CCR TYPE'].values:
-            cmr = summary.loc[summary['CCR TYPE']=='CMR','Avg_Cost'].values[0]
-            cpth = summary.loc[summary['CCR TYPE']=='CPT+H','Avg_Cost'].values[0]
-            delta = ((cpth - cmr)/cmr)*100 if cmr else 0
-            col4.metric("CPT+H vs CMR (%)", f"{delta:.1f}%")
-
+        st.subheader("Executive Summary")
         st.dataframe(summary)
 
-        # ✅ Combined Scatter
-        st.subheader("SMU vs Cost (All Rebuild Types)")
-
-        chart_data = valid[['SMU AT REBUILD', 'Adj Cost', 'CCR TYPE']].dropna()
-        chart_data = chart_data.rename(columns={
-            'SMU AT REBUILD': 'SMU',
-            'Adj Cost': 'Cost'
-        })
-
-        st.scatter_chart(
-            chart_data,
-            x='SMU',
-            y='Cost',
-            color='CCR TYPE'
+        chart_data = valid[['SMU AT REBUILD', 'Adj Cost', 'CCR TYPE']].rename(
+            columns={'SMU AT REBUILD': 'SMU', 'Adj Cost': 'Cost'}
         )
 
-    # ---------- Machine Detail ----------
+        st.scatter_chart(chart_data, x="SMU", y="Cost", color="CCR TYPE")
+
+    # ---------- Machine ----------
     with tab2:
 
         machines = valid['SALES MODEL'].dropna().unique()
 
-        if len(machines) > 0:
-            selected = st.selectbox("Select Machine", machines)
+        selected = st.selectbox("Select Machine", machines)
 
-            dfm = valid[valid['SALES MODEL'] == selected]
+        dfm = valid[valid['SALES MODEL'] == selected]
 
-            st.dataframe(dfm.head(50))
+        st.subheader(f"Machine: {selected}")
 
-            st.subheader("Machine Chart")
+        # ✅ AVERAGE BY TYPE (WHAT YOU WANTED)
+        type_summary = dfm.groupby('CCR TYPE').agg(
+            Avg_Cost=('Adj Cost', 'mean'),
+            Count=('Adj Cost', 'count')
+        ).reset_index()
 
-            chart_df = dfm[['SMU AT REBUILD', 'Adj Cost', 'CCR TYPE']].rename(
-                columns={'SMU AT REBUILD': 'SMU', 'Adj Cost': 'Cost'}
-            )
+        st.write("### Average Cost by Rebuild Type")
+        st.dataframe(type_summary)
 
-            st.scatter_chart(chart_df, x='SMU', y='Cost', color='CCR TYPE')
+        st.write("### Raw Data")
+        st.dataframe(dfm.head(50))
 
-        else:
-            st.warning("No machine data")
+    # ---------- Dealer / Region ----------
+    with tab3:
+
+        st.subheader("Dealer Performance")
+
+        dealer_summary = valid.groupby('Dealer Code').agg(
+            Avg_Cost=('Adj Cost', 'mean'),
+            Count=('Adj Cost', 'count')
+        ).reset_index()
+
+        st.dataframe(dealer_summary)
+
+        st.subheader("Dealer + Rebuild Type")
+
+        dealer_type = valid.groupby(['Dealer Code', 'CCR TYPE']).agg(
+            Avg_Cost=('Adj Cost', 'mean')
+        ).reset_index()
+
+        st.dataframe(dealer_type)
+
+        st.subheader("Region Summary")
+
+        region_summary = valid.groupby('Region').agg(
+            Avg_Cost=('Adj Cost', 'mean'),
+            Count=('Adj Cost', 'count')
+        ).reset_index()
+
+        st.dataframe(region_summary)
 
     # ---------- Exceptions ----------
-    with tab3:
+    with tab4:
         st.write("Outliers:", int(df['Outlier'].sum()))
         st.write("SMU 0/1:", int(df['SMU AT REBUILD'].isin([0, 1]).sum()))
 
-    # ---------- Insights ----------
-    with tab4:
-        st.subheader("Auto Insights")
-        for i in insights:
-            st.write("•", i)
-
     # ---------- Export ----------
     output = BytesIO()
-
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         summary.to_excel(writer, sheet_name='Summary', index=False)
 
         for m in valid['SALES MODEL'].dropna().unique():
             valid[valid['SALES MODEL'] == m].to_excel(
-                writer,
-                sheet_name=str(m)[:31],
-                index=False
+                writer, sheet_name=str(m)[:31], index=False
             )
 
     st.download_button(
@@ -247,3 +222,4 @@ if run and rebuild_file:
 
 else:
     st.info("Upload file and run analysis")
+``
