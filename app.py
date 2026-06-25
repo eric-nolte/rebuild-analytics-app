@@ -3,15 +3,22 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
+from datetime import datetime
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 import urllib.request
 import json
 import re
 
-st.set_page_config(layout="wide")
+# =====================================================
+# APP CONFIG
+# =====================================================
+APP_VERSION = "V14.0"
+APP_LAST_UPDATED = "2026-06-25"
 
-st.title("Rebuild Analytics Platform V13")
-st.caption("Future-proofed for global regions and full certified rebuild type portfolio")
+st.set_page_config(layout="wide", page_title="Rebuild Analytics Platform")
+st.title("Rebuild Analytics Platform")
+st.caption(f"Version {APP_VERSION} | Last updated: {APP_LAST_UPDATED} | Future-proofed for global regions and certified rebuild types")
 
 # =====================================================
 # CONFIG: FUTURE-PROOF REBUILD TYPES + REGIONS
@@ -65,6 +72,20 @@ REBUILD_TYPE_ALIASES = {
     "CPT-O 777": "CPT-O",
 }
 
+METHOD_LOCK_TEXT = """
+**Active Methodology Lock**
+
+- **Cost basis:** Adjusted Total Cost USD = PARTS DN USD + Labor Cost USD. PLUS PARTS DN is ignored entirely.
+- **Labor:** Labor Cost USD = REBUILD WORK HRS × dealer service-year labor rate converted to USD when applicable.
+- **Currency:** Source currency is converted to USD before inflation and analysis.
+- **Inflation:** BLS CPI-U All Items, U.S. city average, not seasonally adjusted. Inflation is applied by component.
+- **Outliers:** Cost-only log(cost) + IQR by Machine + CCR TYPE.
+- **Sample-size rules:** <5 = no removal; 5–7 = 2.0×IQR; 8+ = 1.5×IQR.
+- **SMU:** SMU 0 or 1 is a data-quality flag only; SMU is not used as a statistical outlier basis.
+- **Cross-type review:** CPT+H rows are flagged when above machine-level valid CMR median × 1.10, only when at least 3 valid CMR rows exist.
+- **Adjusted CPT+H:** Adjusted averages exclude cross-type flagged CPT+H rows only; CMR and CPT-O remain unchanged.
+"""
+
 # =====================================================
 # SESSION STATE
 # =====================================================
@@ -74,7 +95,7 @@ if "analysis" not in st.session_state:
     st.session_state.analysis = None
 
 # =====================================================
-# HELPERS
+# DISPLAY / FORMAT HELPERS
 # =====================================================
 def money(x):
     try:
@@ -92,6 +113,18 @@ def pct(x):
         return f"{x:.1f}%"
     except Exception:
         return x
+
+
+def sample_confidence(n):
+    try:
+        n = int(n)
+    except Exception:
+        return "Unknown"
+    if n < 5:
+        return "Limited (<5)"
+    if n < 8:
+        return "Moderate (5–7)"
+    return "Strong (8+)"
 
 
 def display_table(df, currency_cols=None, percent_cols=None, number_cols=None, year_cols=None, smu_cols=None, decimal_cols=None):
@@ -153,13 +186,11 @@ def normalize_ccr_type(value, fallback_text=""):
     if raw in REBUILD_TYPE_ALIASES:
         return REBUILD_TYPE_ALIASES[raw]
 
-    # Match longer codes first so CMCR-HFP wins before CMCR-HP, etc.
     for code in sorted(CERTIFIED_REBUILD_TYPES.keys(), key=len, reverse=True):
         code_pattern = re.escape(code).replace("\\ ", r"[\s_-]*")
         if re.search(rf"(^|[^A-Z0-9]){code_pattern}([^A-Z0-9]|$)", combined):
             return code
 
-    # Additional robust sheet-name/text matching
     for alias, code in REBUILD_TYPE_ALIASES.items():
         if alias in combined:
             return code
@@ -264,7 +295,7 @@ def frankfurter_year_average_to_usd(currency, year):
     with urllib.request.urlopen(url, timeout=20) as response:
         data = json.loads(response.read().decode("utf-8"))
     rates = []
-    for date_key, values in data.get("rates", {}).items():
+    for _, values in data.get("rates", {}).items():
         if "USD" in values:
             rates.append(float(values["USD"]))
     if not rates:
@@ -384,9 +415,61 @@ def build_rate_table_from_workbook(rate_file):
     return rate_df
 
 # =====================================================
-# INPUTS
+# PRE-RUN VALIDATION
+# =====================================================
+def read_rebuild_workbook(uploaded_file):
+    uploaded_file.seek(0)
+    return pd.read_excel(uploaded_file, sheet_name=None)
+
+
+def validate_uploaded_workbook(uploaded_file):
+    try:
+        rebuild = read_rebuild_workbook(uploaded_file)
+    except Exception as e:
+        return None, pd.DataFrame({"Issue": [f"Unable to read workbook: {e}"]})
+
+    required_cols = ["DELIVERED DATE", "ENROLL DATE", "IN SERVICE DATE", "SALES MODEL", "DEALER", "PARTS DN", "SMU AT REBUILD", "REBUILD WORK HRS"]
+    issues = []
+    rows = []
+    all_frames = []
+    for sheet_name, sheet in rebuild.items():
+        sheet = sheet.copy()
+        missing = [c for c in required_cols if c not in sheet.columns]
+        detected_type = normalize_ccr_type(sheet_name, sheet_name)
+        rows.append({
+            "Sheet": sheet_name,
+            "Rows": len(sheet),
+            "Detected CCR TYPE": detected_type,
+            "Missing Required Columns": ", ".join(missing) if missing else "None"
+        })
+        if missing:
+            issues.append({"Issue Type": "Missing Columns", "Sheet": sheet_name, "Details": ", ".join(missing)})
+        sheet["_Detected CCR TYPE"] = detected_type
+        all_frames.append(sheet)
+
+    profile = pd.DataFrame(rows)
+    if all_frames:
+        combined = pd.concat(all_frames, ignore_index=True)
+        if "REGION" in combined.columns:
+            observed_regions = sorted(combined["REGION"].dropna().apply(normalize_region).unique())
+            unknown_regions = [r for r in observed_regions if r not in VALID_REGIONS]
+            for r in unknown_regions:
+                issues.append({"Issue Type": "Unconfigured Region", "Sheet": "All", "Details": r})
+        observed_types = sorted(combined["_Detected CCR TYPE"].dropna().unique())
+        unknown_types = [t for t in observed_types if t not in CERTIFIED_REBUILD_TYPES]
+        for t in unknown_types:
+            issues.append({"Issue Type": "Unknown Rebuild Type", "Sheet": "All", "Details": t})
+
+    issue_df = pd.DataFrame(issues) if issues else pd.DataFrame(columns=["Issue Type", "Sheet", "Details"])
+    return profile, issue_df
+
+# =====================================================
+# UI INPUTS
 # =====================================================
 rebuild_file = st.file_uploader("Upload Rebuild File", type=["xlsx"])
+
+st.subheader("Methodology Lock")
+st.markdown(METHOD_LOCK_TEXT)
 
 st.subheader("Currency Conversion")
 auto_currency = st.checkbox("Automatically convert source currency to USD", True)
@@ -395,11 +478,11 @@ dealer_rate_currency_mode = st.selectbox("Dealer labor rate currency", ["USD", "
 
 st.subheader("Dealer Labor Rates")
 use_default = st.checkbox("Use Built-in Default Dealer Rates", True)
+if use_default:
+    st.warning("Default dealer rates are being used. For production analysis, upload the official dealer-by-year rate workbook.")
 rate_file = None
 if not use_default:
     rate_file = st.file_uploader("Upload Custom Dealer-by-Year Rate Workbook", type=["xlsx"])
-
-st.info("Future-proofed for all certified rebuild types and global regions. Cost basis after currency normalization: Adjusted Total Cost USD = PARTS DN USD + Labor Cost USD.")
 
 apply_inflation = st.checkbox("Apply BLS CPI-U Inflation", True)
 base_year = st.number_input("Base Year for Inflation", 2010, 2030, 2026)
@@ -410,6 +493,19 @@ end_year = st.number_input("End Year", 2010, 2030, 2026)
 rebuild_filter = st.multiselect("Filter Rebuild Types", options=list(CERTIFIED_REBUILD_TYPES.keys()), default=["CMR", "CPT+H", "CPT-O"])
 region_filter = st.multiselect("Filter Regions", options=VALID_REGIONS + ["UNKNOWN", "OTHER"], default=VALID_REGIONS + ["UNKNOWN", "OTHER"])
 
+if rebuild_file:
+    with st.expander("Pre-Run Data Validation", expanded=True):
+        profile, issue_df = validate_uploaded_workbook(rebuild_file)
+        if profile is not None:
+            st.write("### Workbook Profile")
+            display_table(profile, number_cols=["Rows"])
+        st.write("### Validation Issues")
+        if issue_df.empty:
+            st.success("No pre-run validation issues detected.")
+        else:
+            st.warning("Review validation issues before running analysis.")
+            st.dataframe(issue_df, use_container_width=True)
+
 if st.button("Run Analysis"):
     st.session_state.run_clicked = True
     st.session_state.analysis = None
@@ -418,7 +514,7 @@ if st.button("Run Analysis"):
 # ANALYSIS FUNCTION
 # =====================================================
 def run_analysis(rebuild_file, rate_file):
-    rebuild = pd.read_excel(rebuild_file, sheet_name=None)
+    rebuild = read_rebuild_workbook(rebuild_file)
     frames = []
     for sheet_name, sheet in rebuild.items():
         sheet = sheet.copy()
@@ -439,9 +535,11 @@ def run_analysis(rebuild_file, rate_file):
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
+    rows_uploaded = len(df)
     df = df[df["CCR TYPE"].isin(rebuild_filter)].copy()
     df["Service Date"] = df["DELIVERED DATE"].fillna(df["ENROLL DATE"]).fillna(df["IN SERVICE DATE"])
     df["Service Year"] = pd.to_datetime(df["Service Date"], errors="coerce").dt.year
+    missing_service_date_count = int(df["Service Year"].isna().sum())
     df = df[(df["Service Year"] >= start_year) & (df["Service Year"] <= end_year)].copy()
     if machine_input:
         machine_list = [m.strip() for m in machine_input.split(",")]
@@ -450,8 +548,10 @@ def run_analysis(rebuild_file, rate_file):
         raise ValueError("No rows remain after filters. Adjust machine, year, region, or rebuild type filters.")
 
     df["Dealer Code"] = df["DEALER"].astype(str).str.extract(r"([A-Z]\d{3})")
+    missing_dealer_code_count = int(df["Dealer Code"].isna().sum())
     df["Region"] = df["REGION"].apply(normalize_region) if "REGION" in df.columns else "UNKNOWN"
     df["Region Display"] = df["Region"].where(df["Region"].isin(VALID_REGIONS + ["UNKNOWN"]), "OTHER")
+    unknown_region_count = int((df["Region Display"] == "OTHER").sum())
     df = df[df["Region Display"].isin(region_filter)].copy()
     if df.empty:
         raise ValueError("No rows remain after region filter.")
@@ -467,6 +567,7 @@ def run_analysis(rebuild_file, rate_file):
     df = df.merge(fx_lookup, how="left", left_on=["Source Currency", "Service Year"], right_on=["Currency", "Service Year"])
     df["FX to USD"] = df["FX to USD"].fillna(1.0)
     df["FX Source"] = df["FX Source"].fillna("USD/no FX conversion")
+    fallback_fx_count = int((df["FX Source"] == "Embedded fallback FX table").sum())
 
     # ---------- Dealer rates ----------
     rate_df = build_default_rate_table(2010, 2030) if (use_default or rate_file is None) else build_rate_table_from_workbook(rate_file)
@@ -488,6 +589,8 @@ def run_analysis(rebuild_file, rate_file):
     df["PARTS DN"] = pd.to_numeric(df["PARTS DN"], errors="coerce")
     df["REBUILD WORK HRS"] = pd.to_numeric(df["REBUILD WORK HRS"], errors="coerce")
     df["SMU AT REBUILD"] = pd.to_numeric(df["SMU AT REBUILD"], errors="coerce")
+    missing_parts_count = int(df["PARTS DN"].isna().sum())
+    missing_labor_hours_count = int(df["REBUILD WORK HRS"].isna().sum())
     df = df[(df["PARTS DN"] > 0) & (df["REBUILD WORK HRS"].notna())].copy()
 
     df["PARTS DN USD"] = df["PARTS DN"] * df["FX to USD"]
@@ -544,7 +647,7 @@ def run_analysis(rebuild_file, rate_file):
     if valid.empty:
         raise ValueError("All rows were excluded as cost outliers. Review data or filters.")
 
-    # Cross-type rule is intentionally only for CMR vs CPT+H when those rebuild types are present.
+    # Cross-type rule: intentionally only for CMR vs CPT+H.
     df["Cross-Type Exception Flag"] = ""
     df["CMR Benchmark Cost"] = np.nan
     for machine, group in df.groupby("SALES MODEL", dropna=False):
@@ -556,14 +659,42 @@ def run_analysis(rebuild_file, rate_file):
             df.loc[group.index[mask], "Cross-Type Exception Flag"] = "CPT+H Cost Above Typical CMR"
     valid = df[df["Outlier"] == False].copy()
 
+    # ---------- Aggregates ----------
     summary = valid.groupby("CCR TYPE").agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count")).reset_index()
     summary = add_vs_cmr(summary)
+    summary["Sample Confidence"] = summary["Count"].apply(sample_confidence)
+
     adjusted_valid = valid[~((valid["CCR TYPE"] == "CPT+H") & (valid["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
     adjusted_summary = adjusted_valid.groupby("CCR TYPE").agg(Adjusted_Avg_Cost=(cost_col, "mean"), Count=(cost_col, "count")).reset_index()
     adjusted_summary["CCR TYPE"] = adjusted_summary["CCR TYPE"].replace({"CPT+H": "CPT+H Adjusted"})
+    adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
 
     rebuild_reference = pd.DataFrame([{"CCR TYPE": k, "Description": v} for k, v in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
+
+    metadata = pd.DataFrame({
+        "Field": [
+            "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year",
+            "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode",
+            "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used"
+        ],
+        "Value": [
+            APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year,
+            machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode,
+            currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col
+        ]
+    })
+
+    data_quality_summary = pd.DataFrame({
+        "Metric": [
+            "Missing Service Date", "Missing Dealer Code", "Missing Parts DN", "Missing Labor Hours", "SMU 0 or 1", "Unknown/Other Regions", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate"
+        ],
+        "Value": [
+            missing_service_date_count, missing_dealer_code_count, missing_parts_count, missing_labor_hours_count,
+            int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), unknown_region_count, fallback_fx_count,
+            int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), int((df["Rate Source"] == "Overall Average Fallback Rate").sum())
+        ]
+    })
 
     return {
         "df": df, "valid": valid, "adjusted_valid": adjusted_valid,
@@ -571,6 +702,7 @@ def run_analysis(rebuild_file, rate_file):
         "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi,
         "fx_lookup": fx_lookup, "currency_col": currency_col,
         "rebuild_reference": rebuild_reference, "region_reference": region_reference,
+        "metadata": metadata, "data_quality_summary": data_quality_summary,
         "outlier_count": int(df["Outlier"].sum()),
         "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()),
         "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()),
@@ -604,6 +736,8 @@ if st.session_state.run_clicked and rebuild_file:
     currency_col = analysis["currency_col"]
     rebuild_reference = analysis["rebuild_reference"]
     region_reference = analysis["region_reference"]
+    metadata = analysis["metadata"]
+    data_quality_summary = analysis["data_quality_summary"]
     outlier_count = analysis["outlier_count"]
     cross_count = analysis["cross_count"]
     dq_count = analysis["dq_count"]
@@ -611,15 +745,22 @@ if st.session_state.run_clicked and rebuild_file:
     global_year_fallback_count = analysis["global_year_fallback_count"]
     overall_fallback_count = analysis["overall_fallback_count"]
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Dashboard", "Machine Detail", "Dealer", "Region", "Exceptions", "Methodology", "Reference"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["Dashboard", "Machine Detail", "Dealer", "Region", "Exceptions", "Insights", "Methodology", "Reference"])
 
+    # =====================================================
+    # DASHBOARD
+    # =====================================================
     with tab1:
+        st.subheader("Run Summary")
+        display_table(metadata, number_cols=["Value"])
+
         st.subheader("Executive Summary")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Valid Rows", f"{len(valid):,}")
         col2.metric("Cost Outliers", f"{outlier_count:,}")
         col3.metric("Avg USD Analysis Cost", money(valid[cost_col].mean()))
         col4.metric("Cross-Type Flags", f"{cross_count:,}")
+
         st.write("### Standard Rebuild Type Average Cost")
         display_table(summary, currency_cols=["Avg_Cost"], percent_cols=["Vs CMR %"], smu_cols=["Avg_SMU"], number_cols=["Count"])
         st.write("### Adjusted Rebuild Type Average Cost")
@@ -630,10 +771,13 @@ if st.session_state.run_clicked and rebuild_file:
         st.write("### Currency and Inflation Settings")
         settings = pd.DataFrame({
             "Setting": ["Currency Column Detected", "Default Source Currency", "Dealer Rate Currency Mode", "FX Source", "CPI Source", "BLS Series", "Inflation Applied", "Base Year", "Base Year CPI", "Cost Source", "Labor Cost", "PLUS PARTS DN", "Analysis Cost Used"],
-            "Value": [str(currency_col) if currency_col else "None - default source currency used", default_source_currency, dealer_rate_currency_mode, "Frankfurter annual average; embedded fallback if API unavailable", cpi_source, "CUUR0000SA0 - CPI-U All Items, U.S. city average, not seasonally adjusted", "Yes" if apply_inflation else "No", str(base_year), f"{base_cpi:,.3f}" if pd.notna(base_cpi) else "N/A", "PARTS DN USD + Labor Cost USD", "Labor Hours × Dealer Service-Year Rate converted to USD where applicable", "Ignored entirely", cost_col]
+            "Value": [str(currency_col) if currency_col else "None - default source currency used", default_source_currency, dealer_rate_currency_mode, "Frankfurter annual average; embedded fallback if unavailable", cpi_source, "CUUR0000SA0 - CPI-U All Items, U.S. city average, not seasonally adjusted", "Yes" if apply_inflation else "No", str(base_year), f"{base_cpi:,.3f}" if pd.notna(base_cpi) else "N/A", "PARTS DN USD + Labor Cost USD", "Labor Hours × Dealer Service-Year Rate converted to USD where applicable", "Ignored entirely", cost_col]
         })
         st.dataframe(settings, use_container_width=True)
 
+    # =====================================================
+    # MACHINE DETAIL
+    # =====================================================
     with tab2:
         st.subheader("Machine Detail")
         machine_list = sorted(valid["SALES MODEL"].dropna().unique())
@@ -650,12 +794,14 @@ if st.session_state.run_clicked and rebuild_file:
         mcol4.metric("Machine Outliers", f"{int(dfm_all['Outlier'].sum()):,}")
         machine_type_summary = dfm.groupby("CCR TYPE").agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count")).reset_index()
         machine_type_summary = add_vs_cmr(machine_type_summary)
+        machine_type_summary["Sample Confidence"] = machine_type_summary["Count"].apply(sample_confidence)
         st.write("### Average by Rebuild Type")
         display_table(machine_type_summary, currency_cols=["Avg_Cost"], percent_cols=["Vs CMR %"], smu_cols=["Avg_SMU"], number_cols=["Count"])
         st.write("### Bar Chart: Average Rebuild Cost by Type")
         st.bar_chart(machine_type_summary[["CCR TYPE", "Avg_Cost"]].rename(columns={"Avg_Cost": "Average Cost"}).set_index("CCR TYPE"))
         machine_adjusted_summary = machine_adjusted_valid.groupby("CCR TYPE").agg(Adjusted_Avg_Cost=(cost_col, "mean"), Count=(cost_col, "count")).reset_index()
         machine_adjusted_summary["CCR TYPE"] = machine_adjusted_summary["CCR TYPE"].replace({"CPT+H": "CPT+H Adjusted"})
+        machine_adjusted_summary["Sample Confidence"] = machine_adjusted_summary["Count"].apply(sample_confidence)
         st.write("### Adjusted Average Rebuild Cost by Type")
         display_table(machine_adjusted_summary, currency_cols=["Adjusted_Avg_Cost"], number_cols=["Count"])
         if not machine_adjusted_summary.empty:
@@ -682,15 +828,27 @@ if st.session_state.run_clicked and rebuild_file:
         raw_cols = [c for c in raw_cols if c in dfm.columns]
         display_table(dfm[raw_cols].head(50), currency_cols=["PARTS DN", "PARTS DN USD", "Rate", "Rate USD", "Labor Cost USD", "Adjusted Total Cost USD", "Inflation-Adjusted Parts DN USD", "Inflation-Adjusted Base Rate USD", "Inflation-Adjusted Labor Cost USD", "Inflation-Adjusted Adjusted Total Cost USD"], year_cols=["Service Year"], smu_cols=["SMU AT REBUILD"], number_cols=["REBUILD WORK HRS"], decimal_cols=["FX to USD", "Inflation Factor", "Service Year CPI"])
 
+    # =====================================================
+    # DEALER SECTION + SCORING
+    # =====================================================
     with tab3:
         st.subheader("Dealer Analysis")
         dealer_machine_options = ["All Machines"] + sorted(valid["SALES MODEL"].dropna().unique().tolist())
         dealer_machine = st.selectbox("Focus Dealer Analysis on Machine", dealer_machine_options, key="dealer_machine_selector")
         dealer_df = valid.copy() if dealer_machine == "All Machines" else valid[valid["SALES MODEL"] == dealer_machine]
+        dealer_full_df = df.copy() if dealer_machine == "All Machines" else df[df["SALES MODEL"] == dealer_machine]
         dealer_summary = dealer_df.groupby("DEALER").agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count"), Cross_Type_Flags=("Cross-Type Exception Flag", lambda x: (x != "").sum())).reset_index().sort_values("Avg_Cost", ascending=False)
         dealer_summary = add_vs_section_avg(dealer_summary)
+        dealer_outliers = dealer_full_df.groupby("DEALER").agg(Total_Rows=(cost_col, "count"), Outlier_Rows=("Outlier", "sum"), DQ_Rows=("Data Quality Exception Flag", lambda x: (x != "").sum())).reset_index()
+        dealer_summary = dealer_summary.merge(dealer_outliers, on="DEALER", how="left")
+        dealer_summary["Outlier Rate %"] = (dealer_summary["Outlier_Rows"] / dealer_summary["Total_Rows"]) * 100
+        dealer_summary["DQ Rate %"] = (dealer_summary["DQ_Rows"] / dealer_summary["Total_Rows"]) * 100
+        dealer_summary["Cross Flag Rate %"] = (dealer_summary["Cross_Type_Flags"] / dealer_summary["Count"]) * 100
+        dealer_summary["Performance Score"] = 100 - dealer_summary["Vs Section Avg %"].clip(lower=0).fillna(0) * 0.50 - dealer_summary["Outlier Rate %"].fillna(0) * 0.30 - dealer_summary["Cross Flag Rate %"].fillna(0) * 0.20 - dealer_summary["DQ Rate %"].fillna(0) * 0.20
+        dealer_summary["Performance Score"] = dealer_summary["Performance Score"].clip(lower=0, upper=100)
+        dealer_summary["Performance Label"] = np.where(dealer_summary["Performance Score"] >= 85, "Strong", np.where(dealer_summary["Performance Score"] >= 70, "Monitor", "Review Needed"))
         st.write(f"### Dealer Summary - {dealer_machine}")
-        display_table(dealer_summary, currency_cols=["Avg_Cost"], percent_cols=["Vs Section Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross_Type_Flags"])
+        display_table(dealer_summary, currency_cols=["Avg_Cost"], percent_cols=["Vs Section Avg %", "Outlier Rate %", "DQ Rate %", "Cross Flag Rate %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross_Type_Flags", "Total_Rows", "Outlier_Rows", "DQ_Rows", "Performance Score"])
         dealer_type = dealer_df.groupby(["DEALER", "CCR TYPE"]).agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count")).reset_index().sort_values(["DEALER", "CCR TYPE"])
         st.write("### Dealer by Rebuild Type")
         display_table(dealer_type, currency_cols=["Avg_Cost"], smu_cols=["Avg_SMU"], number_cols=["Count"])
@@ -698,6 +856,9 @@ if st.session_state.run_clicked and rebuild_file:
             st.write("### Dealer Average Cost Chart")
             st.bar_chart(dealer_summary[["DEALER", "Avg_Cost"]].rename(columns={"Avg_Cost": "Average Cost"}).set_index("DEALER"))
 
+    # =====================================================
+    # REGION SECTION
+    # =====================================================
     with tab4:
         st.subheader("Region Analysis")
         region_machine_options = ["All Machines"] + sorted(valid["SALES MODEL"].dropna().unique().tolist())
@@ -714,10 +875,15 @@ if st.session_state.run_clicked and rebuild_file:
             st.write("### Region Average Cost Chart")
             st.bar_chart(region_summary[["Region", "Avg_Cost"]].rename(columns={"Avg_Cost": "Average Cost"}).set_index("Region"))
 
+    # =====================================================
+    # EXCEPTIONS
+    # =====================================================
     with tab5:
         st.subheader("Exception Summary")
         exception_summary = pd.DataFrame({"Metric": ["Cost Outliers", "CPT+H Cross-Type Flags", "SMU 0 or 1", "Insufficient Sample Rows", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate"], "Value": [outlier_count, cross_count, dq_count, insufficient_count, global_year_fallback_count, overall_fallback_count]})
         st.dataframe(exception_summary, use_container_width=True)
+        st.write("### Data Quality Summary")
+        st.dataframe(data_quality_summary, use_container_width=True)
         st.write("### Outlier Performance by Machine + Rebuild Type")
         outlier_perf_all = df.groupby(["SALES MODEL", "CCR TYPE"]).agg(Total_Rows=(cost_col, "count"), Outlier_Rows=("Outlier", "sum"), Avg_Cost_All=(cost_col, "mean")).reset_index()
         outlier_perf_all["Outlier Rate %"] = (outlier_perf_all["Outlier_Rows"] / outlier_perf_all["Total_Rows"]) * 100
@@ -735,23 +901,43 @@ if st.session_state.run_clicked and rebuild_file:
         else:
             st.write("No cost outliers detected.")
 
+    # =====================================================
+    # INSIGHTS
+    # =====================================================
     with tab6:
+        st.subheader("Executive Insights")
+        insights = []
+        if not summary.empty:
+            top_type = summary.sort_values("Avg_Cost", ascending=False).iloc[0]
+            insights.append(f"Highest average rebuild type cost is {top_type['CCR TYPE']} at {money(top_type['Avg_Cost'])}.")
+        machine_avg = valid.groupby("SALES MODEL")[cost_col].mean().sort_values(ascending=False)
+        if len(machine_avg) > 0:
+            insights.append(f"Highest average machine cost is {machine_avg.index[0]} at {money(machine_avg.iloc[0])}.")
+        review_dealers = dealer_summary[dealer_summary["Performance Label"] == "Review Needed"] if "Performance Label" in dealer_summary.columns else pd.DataFrame()
+        if not review_dealers.empty:
+            insights.append(f"{len(review_dealers)} dealer(s) are marked Review Needed based on score, cost position, outlier rate, cross-type flags, and data quality.")
+        insights.append(f"Cost outliers excluded from core averages: {outlier_count:,}.")
+        insights.append(f"CPT+H cross-type review flags: {cross_count:,}.")
+        insights.append(f"Rows using fallback labor rates: {global_year_fallback_count + overall_fallback_count:,}.")
+        for insight in insights:
+            st.write("•", insight)
+
+    # =====================================================
+    # METHODOLOGY
+    # =====================================================
+    with tab7:
         st.subheader("Methodology")
+        st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""
-        **Rebuild type future-proofing:** The app supports the full configured certified rebuild type list and will preserve known certified rebuild codes beyond CMR, CPT+H, and CPT-O. Cross-type exception logic remains intentionally limited to CMR vs CPT+H.  
+        **Rebuild type future-proofing:** The app supports the full configured certified rebuild type list and preserves known certified rebuild codes beyond CMR, CPT+H, and CPT-O. Cross-type exception logic remains intentionally limited to CMR vs CPT+H.  
         **Region future-proofing:** The app normalizes configured global regions and treats unconfigured regions as OTHER for filter purposes.  
-        **Currency:** Source currency is detected from a currency column when available. Otherwise the default source currency is used. Costs are converted to USD before inflation and analysis.  
-        **FX source:** Frankfurter annual average exchange rates are used where available; embedded fallback rates are used only if the FX API is unavailable.  
-        **Cost basis:** Adjusted Total Cost USD = PARTS DN USD + Labor Cost USD. PLUS PARTS DN is ignored entirely.  
-        **Labor:** Labor Cost USD = REBUILD WORK HRS × dealer service-year labor rate converted to USD where applicable. Missing dealer-year rates fall back to yearly average, then overall average.  
-        **Inflation:** Inflation uses BLS CPI-U All Items, U.S. city average, not seasonally adjusted. Inflation is applied by component after USD conversion.  
-        **Outliers:** Cost-only statistical screening using log(cost) + IQR by Machine + CCR TYPE.  
-        **Sample-size rules:** <5 records = no removal; 5–7 records = 2.0×IQR; 8+ records = 1.5×IQR.  
-        **SMU:** SMU 0 or 1 is a data-quality flag only and is not removed as a statistical outlier.  
-        **Adjusted CPT+H:** Adjusted averages exclude cross-type flagged CPT+H rows only; CMR and CPT-O stay unchanged.
+        **Dealer performance score:** Starts at 100 and subtracts weighted impacts from above-average cost position, outlier rate, cross-type flag rate, and data-quality rate. Labels: Strong ≥85, Monitor ≥70, Review Needed <70.
         """)
 
-    with tab7:
+    # =====================================================
+    # REFERENCE
+    # =====================================================
+    with tab8:
         st.subheader("Configured Rebuild Types and Regions")
         st.write("### Certified Rebuild Types")
         st.dataframe(rebuild_reference, use_container_width=True)
@@ -767,6 +953,7 @@ if st.session_state.run_clicked and rebuild_file:
     # =====================================================
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        metadata.to_excel(writer, sheet_name="Run Metadata", index=False)
         summary.to_excel(writer, sheet_name="Summary", index=False)
         adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
         dealer_summary.to_excel(writer, sheet_name="Dealer Summary", index=False)
@@ -774,6 +961,7 @@ if st.session_state.run_clicked and rebuild_file:
         region_summary.to_excel(writer, sheet_name="Region Summary", index=False)
         region_type.to_excel(writer, sheet_name="Region By Type", index=False)
         exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
+        data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
         outlier_perf_all.to_excel(writer, sheet_name="Outlier Performance", index=False)
         cross_rows.to_excel(writer, sheet_name="Cross Type Flags", index=False)
         df[df["Outlier"] == True].to_excel(writer, sheet_name="Outlier Rows", index=False)
@@ -785,14 +973,25 @@ if st.session_state.run_clicked and rebuild_file:
             valid[valid["SALES MODEL"] == m].to_excel(writer, sheet_name=safe_sheet_name(m), index=False)
 
         workbook = writer.book
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        thin = Side(style="thin", color="D9E2F3")
         currency_keywords = ["COST", "RATE", "PARTS DN", "LABOR", "BENCHMARK"]
         percent_keywords = ["%"]
         decimal_keywords = ["CPI", "FACTOR", "FX"]
         for ws in workbook.worksheets:
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = ws.dimensions
+            for cell in ws[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center")
             header_map = {cell.column: str(cell.value).upper() if cell.value is not None else "" for cell in ws[1]}
             for col_idx, header in header_map.items():
                 col_letter = get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = min(max(len(header) + 4, 14), 38)
                 for cell in ws[col_letter][1:]:
+                    cell.border = Border(bottom=thin)
                     if "YEAR" in header or "SMU" in header or header in ["COUNT", "TOTAL_ROWS", "OUTLIER_ROWS", "VALID_ROWS", "VALUE"]:
                         cell.number_format = '#,##0'
                     elif any(k in header for k in percent_keywords):
