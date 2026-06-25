@@ -23,12 +23,12 @@ base_year = st.number_input("Base Year", 2010, 2030, 2026)
 
 run = st.button("Run Analysis")
 
-# ---------- Insights Function ----------
+# ---------- Insights ----------
 def generate_insights(df, summary):
     insights = []
-    
+
     try:
-        if ('CMR' in summary['CCR TYPE'].values) and ('CPT+H' in summary['CCR TYPE'].values):
+        if 'CMR' in summary['CCR TYPE'].values and 'CPT+H' in summary['CCR TYPE'].values:
             cmr = summary.loc[summary['CCR TYPE'] == 'CMR', 'Avg_Cost'].values[0]
             cpth = summary.loc[summary['CCR TYPE'] == 'CPT+H', 'Avg_Cost'].values[0]
             diff = ((cpth - cmr) / cmr) * 100 if cmr else 0
@@ -46,12 +46,11 @@ def generate_insights(df, summary):
     return insights
 
 
-# ---------- Run ----------
 if run and rebuild_file:
 
     rebuild = pd.read_excel(rebuild_file, sheet_name=None)
 
-    # ---- Rates ----
+    # ---------- Rates ----------
     if use_default or not rate_file:
         years = list(range(2010, 2031))
         rate_df = pd.DataFrame({
@@ -73,22 +72,26 @@ if run and rebuild_file:
                 rows.append(temp[['Dealer Code', 'Service Year', 'Rate']])
         rate_df = pd.concat(rows)
 
-    # ---- Combine ----
+    # ---------- Combine ----------
     frames = []
     for name, df in rebuild.items():
+        df = df.copy()
+
         if 'CMR' in name:
             df['CCR TYPE'] = 'CMR'
         elif 'CPT+H' in name:
             df['CCR TYPE'] = 'CPT+H'
         else:
             df['CCR TYPE'] = 'CPT-O'
+
         frames.append(df)
 
     df = pd.concat(frames, ignore_index=True)
 
-    # ---- Core Logic ----
+    # ---------- Core ----------
     df['Service Date'] = df['DELIVERED DATE'].fillna(
         df['ENROLL DATE']).fillna(df['IN SERVICE DATE'])
+
     df['Service Year'] = pd.to_datetime(
         df['Service Date'], errors='coerce').dt.year
 
@@ -99,23 +102,29 @@ if run and rebuild_file:
         machines = [m.strip() for m in machine_input.split(',')]
         df = df[df['SALES MODEL'].isin(machines)]
 
-    df['Dealer Code'] = df['DEALER'].str.extract(r'([A-Z]\d{3})')
-    df = df.merge(rate_df, how='left',
-                  on=['Dealer Code', 'Service Year'])
+    df['Dealer Code'] = df['DEALER'].astype(str).str.extract(r'([A-Z]\d{3})')
+    df = df.merge(rate_df, how='left', on=['Dealer Code', 'Service Year'])
 
     df['Base Rate'] = df['Rate'].fillna(rate_df['Rate'].mean())
 
-    # ---- Cost ----
+    # ---------- Cost ----------
     df['Labor Cost'] = df['REBUILD WORK HRS'] * df['Base Rate']
+
     df['Infl'] = df['Service Year'].apply(
-        lambda y: 1 + (base_year - y) * 0.03)
+        lambda y: 1 + (base_year - y) * 0.03 if pd.notnull(y) else 1
+    )
+
     df['Adj Cost'] = df['PARTS DN'] * df['Infl'] + \
         df['Labor Cost'] * df['Infl']
 
-    # ---- Outliers ----
+    df = df[df['Adj Cost'] > 0]  # ✅ avoid log errors
+
+    # ---------- Outliers ----------
     df['log'] = np.log(df['Adj Cost'])
 
     def detect(g):
+        g = g.copy()  # ✅ critical for cloud
+
         if len(g) < 5:
             g['Outlier'] = False
         else:
@@ -124,13 +133,19 @@ if run and rebuild_file:
             m = 2 if len(g) < 8 else 1.5
             low, high = q1 - m * iqr, q3 + m * iqr
             g['Outlier'] = (g['log'] < low) | (g['log'] > high)
+
         return g
 
-    df = df.groupby(['SALES MODEL', 'CCR TYPE'],
-                    group_keys=False).apply(detect)
+    df = df.groupby(['SALES MODEL', 'CCR TYPE'], group_keys=False).apply(detect)
 
-    valid = df[~df['Outlier']]
+    # ✅ GUARANTEE column exists
+    if 'Outlier' not in df.columns:
+        df['Outlier'] = False
 
+    # ---------- Valid ----------
+    valid = df[df['Outlier'] == False].copy()
+
+    # ---------- Summary ----------
     summary = valid.groupby('CCR TYPE').agg(
         Avg_Cost=('Adj Cost', 'mean'),
         Count=('Adj Cost', 'count')
@@ -140,7 +155,8 @@ if run and rebuild_file:
 
     # ---------- Tabs ----------
     tab1, tab2, tab3, tab4 = st.tabs(
-        ["Dashboard", "Machine Detail", "Exceptions", "Insights"])
+        ["Dashboard", "Machine Detail", "Exceptions", "Insights"]
+    )
 
     # ---------- Dashboard ----------
     with tab1:
@@ -148,7 +164,7 @@ if run and rebuild_file:
 
         col1.metric("Total Rows", len(valid))
         col2.metric("Outliers", int(df['Outlier'].sum()))
-        col3.metric("Avg Cost", f"${int(valid['Adj Cost'].mean()):,}")
+        col3.metric("Avg Cost", f"${int(valid['Adj Cost'].mean()):,}" if len(valid) > 0 else "$0")
 
         st.dataframe(summary)
 
@@ -156,37 +172,40 @@ if run and rebuild_file:
 
         for t in valid['CCR TYPE'].dropna().unique():
             subset = valid[valid['CCR TYPE'] == t]
+
             st.write(f"### {t}")
 
-            chart_df = subset[['SMU AT REBUILD', 'Adj Cost']] \
-                .rename(columns={
+            chart_df = subset[['SMU AT REBUILD', 'Adj Cost']].rename(
+                columns={
                     'SMU AT REBUILD': 'SMU',
                     'Adj Cost': 'Cost'
-                })
+                }
+            )
 
             st.scatter_chart(chart_df)
 
     # ---------- Machine ----------
     with tab2:
-        machines = valid['SALES MODEL'].unique()
-        selected = st.selectbox("Select Machine", machines)
+        machines = valid['SALES MODEL'].dropna().unique()
 
-        dfm = valid[valid['SALES MODEL'] == selected]
-        st.dataframe(dfm.head(50))
+        if len(machines) > 0:
+            selected = st.selectbox("Select Machine", machines)
+            dfm = valid[valid['SALES MODEL'] == selected]
 
-        st.subheader("Machine Chart")
+            st.dataframe(dfm.head(50))
 
-        for t in dfm['CCR TYPE'].unique():
-            subset = dfm[dfm['CCR TYPE'] == t]
-            st.write(f"### {t}")
+            for t in dfm['CCR TYPE'].unique():
+                subset = dfm[dfm['CCR TYPE'] == t]
 
-            chart_df = subset[['SMU AT REBUILD', 'Adj Cost']] \
-                .rename(columns={
-                    'SMU AT REBUILD': 'SMU',
-                    'Adj Cost': 'Cost'
-                })
+                st.write(f"### {t}")
 
-            st.scatter_chart(chart_df)
+                chart_df = subset[['SMU AT REBUILD', 'Adj Cost']].rename(
+                    columns={'SMU AT REBUILD': 'SMU', 'Adj Cost': 'Cost'}
+                )
+
+                st.scatter_chart(chart_df)
+        else:
+            st.warning("No machine data available")
 
     # ---------- Exceptions ----------
     with tab3:
@@ -196,17 +215,23 @@ if run and rebuild_file:
     # ---------- Insights ----------
     with tab4:
         st.subheader("Auto Insights")
-        for i in insights:
-            st.write("•", i)
+
+        if insights:
+            for i in insights:
+                st.write("•", i)
+        else:
+            st.write("No insights generated")
 
     # ---------- Export ----------
     output = BytesIO()
+
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         summary.to_excel(writer, sheet_name='Summary', index=False)
 
-        for m in valid['SALES MODEL'].unique():
+        for m in valid['SALES MODEL'].dropna().unique():
             valid[valid['SALES MODEL'] == m].to_excel(
-                writer, sheet_name=str(m)[:31], index=False)
+                writer, sheet_name=str(m)[:31], index=False
+            )
 
     st.download_button(
         "Download Workbook",
