@@ -14,7 +14,7 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V15.8"
+APP_VERSION = "V15.9"
 APP_LAST_UPDATED = "2026-06-26"
 CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
 MAX_UPLOAD_MB = 50
@@ -578,13 +578,35 @@ def get_cpi_table(start_year, end_year, base_year):
         return fallback_bls_cpi_table(min_year, max_year), "Fallback embedded CPI table because BLS API was unavailable"
 
 def build_default_rate_table(start=2010, end=2030):
+    """
+    Return built-in expanded dealer-year labor rates from the bundled workbook.
+    The workbook must sit in the same folder as app.py when deployed.
+    Falls back to the old generic yearly rate table only if the workbook is missing/unreadable.
+    """
+    built_in_rate_path = Path("expanded_dealer_base_rate_by_year_2016_2026.xlsx")
+    if built_in_rate_path.exists():
+        try:
+            rate_df = parse_multisheet_rate_workbook(built_in_rate_path)
+            rate_df = clean_rate_table(rate_df)
+            if not rate_df.empty:
+                if start is not None and end is not None:
+                    rate_df = rate_df[(rate_df["Service Year"] >= int(start)) & (rate_df["Service Year"] <= int(end))].copy()
+                rate_df["Rate File Format"] = "Built-in Expanded Dealer Rates 2016-2026"
+                rate_df["Notes"] = "Built-in expanded dealer base rate workbook: 2016-2026"
+                return rate_df
+        except Exception:
+            pass
+
+    # Emergency fallback only if the built-in workbook is unavailable.
     years = list(range(start, end + 1))
     return pd.DataFrame({
         "Dealer Code": ["DEFAULT"] * len(years),
         "Service Year": years,
         "Rate": [115 + (year - 2016) * 3 for year in years],
         "Rate Currency": ["USD"] * len(years),
-        "Rate File Format": ["Built-in Default"] * len(years),
+        "Notes": ["Emergency generic fallback because built-in dealer workbook was not found/readable"] * len(years),
+        "Rate File Sheet": ["Emergency Fallback"] * len(years),
+        "Rate File Format": ["Emergency Generic Default"] * len(years),
     })
 
 
@@ -592,7 +614,7 @@ def normalize_dealer_code(value):
     if pd.isna(value):
         return ""
     text = str(value).strip().upper()
-    match = re.search(r"([A-Z]\d{3})", text)
+    match = re.search(r"([A-Z][A-Z0-9]{3})", text)
     return match.group(1) if match else text
 
 
@@ -1018,7 +1040,7 @@ st.download_button(
 )
 
 if use_default:
-    st.warning("Default dealer rates are being used. For production analysis, upload the official dealer-by-year rate workbook.")
+    st.warning("Built-in expanded dealer base rates 2016-2026 are being used from the bundled workbook. You can still upload a custom dealer labor rate workbook if needed.")
 else:
     rate_file_format = st.selectbox(
         "Dealer rate file format",
@@ -1113,7 +1135,7 @@ def run_analysis(rebuild_file, rate_file):
     if df.empty:
         raise ValueError("No rows remain after filters. Adjust machine, year, region, or rebuild type filters.")
 
-    df["Dealer Code"] = df["DEALER"].astype(str).str.extract(r"([A-Z]\d{3})")
+    df["Dealer Code"] = df["DEALER"].astype(str).str.upper().str.extract(r"([A-Z][A-Z0-9]{3})")
     missing_dealer_code_count = int(df["Dealer Code"].isna().sum())
     df["Region"] = df["REGION"].apply(normalize_region) if "REGION" in df.columns else "UNKNOWN"
     df["Region Display"] = df["Region"].where(df["Region"].isin(VALID_REGIONS + ["UNKNOWN"]), "OTHER")
@@ -1136,8 +1158,8 @@ def run_analysis(rebuild_file, rate_file):
 
     if use_default or rate_file is None:
         rate_df = build_default_rate_table(2010, 2030)
-        rate_file_mode = "Built-in Default Dealer Rates"
-        effective_fallback_behavior = "Built-in default rates"
+        rate_file_mode = "Built-in Expanded Dealer Rates 2016-2026"
+        effective_fallback_behavior = "Built-in expanded dealer rates; missing dealer-years use yearly average fallback, then overall average if needed"
     else:
         rate_df = build_rate_table_from_workbook(rate_file, rate_file_format)
         if rate_df.empty:
@@ -1263,7 +1285,7 @@ def run_analysis(rebuild_file, rate_file):
     adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
     rebuild_reference = pd.DataFrame([{"CCR TYPE": key, "Description": value} for key, value in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
-    metadata = pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Default" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique()]})
+    metadata = pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Expanded 2016-2026" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique()]})
     data_quality_summary = pd.DataFrame({"Metric": ["Missing Service Date", "Missing Dealer Code", "Missing Parts DN", "Missing Labor Hours", "SMU 0 or 1", "Unknown/Other Regions", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate", "Rows Using Built-in Default Fallback Rate", "Dealer Rate Exception Rows"], "Value": [missing_service_date_count, missing_dealer_code_count, missing_parts_count, missing_labor_hours_count, int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), unknown_region_count, fallback_fx_count, int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), int((df["Rate Source"] == "Built-in Default Fallback Rate").sum()), int((df["Dealer Rate Exception Flag"] != "").sum())]})
     return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior}
 
@@ -1492,7 +1514,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V15.8 addition:** Includes V15.4 single-machine workbook export, Confidential Yellow security controls, Excel formula-injection sanitization, export authorization acknowledgement, file-size/type validation, clear-session reset, row highlighting for outliers/cross-type exceptions/insufficient-sample rows, and enhanced dealer labor rate upload with flat-table template, legacy multi-sheet support, validation preview, and configurable missing-rate fallback.""")
+**V15.9 addition:** Uses the bundled expanded dealer base-rate workbook for 2016-2026 as the default dealer labor-rate source, while preserving custom upload, flat-table template, legacy multi-sheet support, validation preview, configurable missing-rate fallback, machine export, Confidential Yellow security controls, and Excel row highlighting.""")
 
     with tab8:
         st.subheader("Configured Rebuild Types and Regions")
