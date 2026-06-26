@@ -14,7 +14,7 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V15.7"
+APP_VERSION = "V15.8"
 APP_LAST_UPDATED = "2026-06-26"
 CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
 MAX_UPLOAD_MB = 50
@@ -579,38 +579,182 @@ def get_cpi_table(start_year, end_year, base_year):
 
 def build_default_rate_table(start=2010, end=2030):
     years = list(range(start, end + 1))
-    return pd.DataFrame({"Dealer Code": ["DEFAULT"] * len(years), "Service Year": years, "Rate": [115 + (year - 2016) * 3 for year in years]})
+    return pd.DataFrame({
+        "Dealer Code": ["DEFAULT"] * len(years),
+        "Service Year": years,
+        "Rate": [115 + (year - 2016) * 3 for year in years],
+        "Rate Currency": ["USD"] * len(years),
+        "Rate File Format": ["Built-in Default"] * len(years),
+    })
 
-def build_rate_table_from_workbook(rate_file):
-    rates = pd.read_excel(rate_file, sheet_name=None)
+
+def normalize_dealer_code(value):
+    if pd.isna(value):
+        return ""
+    text = str(value).strip().upper()
+    match = re.search(r"([A-Z]\d{3})", text)
+    return match.group(1) if match else text
+
+
+def normalize_rate_columns(df):
+    """Normalize common dealer-rate column names to Dealer Code, Service Year, Rate, Rate Currency, Notes."""
+    temp = df.copy()
+    temp.columns = [str(col).strip() for col in temp.columns]
+    rename_map = {}
+    for col in temp.columns:
+        cu = str(col).strip().upper().replace("_", " ")
+        if cu in ["DEALER", "DEALER CODE", "DEALER ID", "CODE"] or ("DEALER" in cu and "CODE" in cu):
+            rename_map[col] = "Dealer Code"
+        elif cu in ["YEAR", "SERVICE YEAR", "RATE YEAR", "BASE RATE YEAR"] or ("YEAR" in cu and "RATE" in cu):
+            rename_map[col] = "Service Year"
+        elif cu in ["RATE", "LABOR RATE", "BASE RATE", "AVG BASE RATE", "AVERAGE BASE RATE", "DEALER AVERAGE BASE RATE"] or ("RATE" in cu and "SOURCE" not in cu and "CURRENCY" not in cu):
+            rename_map[col] = "Rate"
+        elif cu in ["CURRENCY", "RATE CURRENCY", "CURRENCY CODE", "CCY"]:
+            rename_map[col] = "Rate Currency"
+        elif cu in ["NOTE", "NOTES", "COMMENTS", "COMMENT"]:
+            rename_map[col] = "Notes"
+    temp = temp.rename(columns=rename_map)
+    return temp
+
+
+def parse_flat_rate_table(rate_file, sheet_name=None):
+    """Parse a preferred flat dealer-rate table from one sheet."""
+    sheets = pd.read_excel(rate_file, sheet_name=None)
+    candidate_items = []
+    if sheet_name and sheet_name in sheets:
+        candidate_items = [(sheet_name, sheets[sheet_name])]
+    else:
+        candidate_items = list(sheets.items())
+
+    for sname, sheet in candidate_items:
+        temp = normalize_rate_columns(sheet)
+        if {"Dealer Code", "Service Year", "Rate"}.issubset(set(temp.columns)):
+            out = temp.copy()
+            out["Rate File Sheet"] = sname
+            out["Rate File Format"] = "Flat Table"
+            if "Rate Currency" not in out.columns:
+                out["Rate Currency"] = "USD"
+            if "Notes" not in out.columns:
+                out["Notes"] = ""
+            return out[["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"]]
+    return pd.DataFrame(columns=["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"])
+
+
+def parse_multisheet_rate_workbook(rate_file):
+    """Parse legacy dealer-rate workbook where each sheet represents a dealer."""
+    sheets = pd.read_excel(rate_file, sheet_name=None)
     rows = []
-    for sheet_name, sheet in rates.items():
+    for sheet_name, sheet in sheets.items():
         if str(sheet_name).strip().lower() == "summary":
             continue
-        temp = sheet.copy()
-        temp.columns = [str(col).strip() for col in temp.columns]
-        rename_map = {}
-        for col in temp.columns:
-            col_upper = col.upper()
-            if col_upper == "YEAR":
-                rename_map[col] = "Service Year"
-            elif "BASE RATE" in col_upper or col_upper == "RATE":
-                rename_map[col] = "Rate"
-        temp = temp.rename(columns=rename_map)
-        dealer_code = str(sheet_name).split("_")[0].strip()
+        temp = normalize_rate_columns(sheet)
+        dealer_code = normalize_dealer_code(str(sheet_name).split("_")[0].strip())
         if "Dealer Code" not in temp.columns:
             temp["Dealer Code"] = dealer_code
+        if "Rate Currency" not in temp.columns:
+            temp["Rate Currency"] = "USD"
+        if "Notes" not in temp.columns:
+            temp["Notes"] = ""
         if "Service Year" in temp.columns and "Rate" in temp.columns:
-            rows.append(temp[["Dealer Code", "Service Year", "Rate"]])
+            keep = temp[["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes"]].copy()
+            keep["Rate File Sheet"] = sheet_name
+            keep["Rate File Format"] = "Multi-Sheet Dealer Workbook"
+            rows.append(keep)
     if not rows:
+        return pd.DataFrame(columns=["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"])
+    return pd.concat(rows, ignore_index=True)
+
+
+def clean_rate_table(rate_df):
+    """Clean, type, and de-duplicate dealer rate table."""
+    if rate_df is None or rate_df.empty:
+        return pd.DataFrame(columns=["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"])
+    out = rate_df.copy()
+    out["Dealer Code"] = out["Dealer Code"].apply(normalize_dealer_code)
+    out["Service Year"] = pd.to_numeric(out["Service Year"], errors="coerce")
+    out["Rate"] = pd.to_numeric(out["Rate"], errors="coerce")
+    out["Rate Currency"] = out.get("Rate Currency", "USD")
+    out["Rate Currency"] = out["Rate Currency"].apply(lambda x: normalize_currency_code(x, "USD"))
+    if "Notes" not in out.columns:
+        out["Notes"] = ""
+    if "Rate File Sheet" not in out.columns:
+        out["Rate File Sheet"] = "Unknown"
+    if "Rate File Format" not in out.columns:
+        out["Rate File Format"] = "Unknown"
+    out = out.dropna(subset=["Service Year", "Rate"])
+    out = out[out["Dealer Code"].astype(str).str.strip() != ""]
+    out = out[out["Rate"] > 0]
+    out["Service Year"] = out["Service Year"].astype(int)
+    out = out.sort_values(["Dealer Code", "Service Year", "Rate File Sheet"]).drop_duplicates(["Dealer Code", "Service Year"], keep="last")
+    return out[["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"]]
+
+
+def build_rate_table_from_workbook(rate_file, rate_format="Auto-detect"):
+    """Build dealer rate table from either the preferred flat table or legacy multi-sheet workbook."""
+    if rate_file is None:
         return build_default_rate_table()
-    rate_df = pd.concat(rows, ignore_index=True)
-    rate_df["Service Year"] = pd.to_numeric(rate_df["Service Year"], errors="coerce")
-    rate_df["Rate"] = pd.to_numeric(rate_df["Rate"], errors="coerce")
-    rate_df = rate_df.dropna(subset=["Service Year", "Rate"])
-    rate_df["Service Year"] = rate_df["Service Year"].astype(int)
-    rate_df["Dealer Code"] = rate_df["Dealer Code"].astype(str).str.strip()
-    return rate_df
+    rate_file.seek(0)
+    if rate_format == "Flat Table":
+        rate_df = parse_flat_rate_table(rate_file)
+    elif rate_format == "Multi-Sheet Dealer Workbook":
+        rate_file.seek(0)
+        rate_df = parse_multisheet_rate_workbook(rate_file)
+    else:
+        rate_df = parse_flat_rate_table(rate_file)
+        if rate_df.empty:
+            rate_file.seek(0)
+            rate_df = parse_multisheet_rate_workbook(rate_file)
+    return clean_rate_table(rate_df)
+
+
+def validate_dealer_rate_table(rate_df, selected_start_year=None, selected_end_year=None):
+    """Create validation summary for uploaded dealer labor rates."""
+    if rate_df is None or rate_df.empty:
+        return pd.DataFrame({"Check": ["Rate rows parsed"], "Value": [0], "Status": ["Review"]})
+    checks = []
+    checks.append({"Check": "Rate rows parsed", "Value": len(rate_df), "Status": "OK" if len(rate_df) > 0 else "Review"})
+    checks.append({"Check": "Unique dealers", "Value": rate_df["Dealer Code"].nunique(), "Status": "OK"})
+    checks.append({"Check": "Minimum service year", "Value": int(rate_df["Service Year"].min()) if not rate_df.empty else "", "Status": "OK"})
+    checks.append({"Check": "Maximum service year", "Value": int(rate_df["Service Year"].max()) if not rate_df.empty else "", "Status": "OK"})
+    checks.append({"Check": "Missing dealer codes", "Value": int((rate_df["Dealer Code"].astype(str).str.strip() == "").sum()), "Status": "OK" if int((rate_df["Dealer Code"].astype(str).str.strip() == "").sum()) == 0 else "Review"})
+    checks.append({"Check": "Non-positive rates", "Value": int((rate_df["Rate"] <= 0).sum()), "Status": "OK" if int((rate_df["Rate"] <= 0).sum()) == 0 else "Review"})
+    duplicate_count = int(rate_df.duplicated(["Dealer Code", "Service Year"]).sum())
+    checks.append({"Check": "Duplicate dealer-year rows after cleaning", "Value": duplicate_count, "Status": "OK" if duplicate_count == 0 else "Review"})
+    if selected_start_year is not None and selected_end_year is not None:
+        outside = int(((rate_df["Service Year"] < selected_start_year) | (rate_df["Service Year"] > selected_end_year)).sum())
+        checks.append({"Check": "Rows outside selected analysis year range", "Value": outside, "Status": "OK" if outside == 0 else "Info"})
+    checks.append({"Check": "Detected rate format(s)", "Value": ", ".join(sorted(rate_df["Rate File Format"].dropna().unique())), "Status": "OK"})
+    return pd.DataFrame(checks)
+
+
+def create_dealer_rate_template():
+    """Return a downloadable preferred flat dealer-rate template workbook."""
+    template = pd.DataFrame({
+        "Dealer Code": ["A000", "A000", "B123"],
+        "Service Year": [2024, 2025, 2025],
+        "Rate": [150.00, 155.00, 162.50],
+        "Rate Currency": ["USD", "USD", "USD"],
+        "Notes": ["Example only", "Example only", "Example only"],
+    })
+    instructions = pd.DataFrame({
+        "Field": ["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes"],
+        "Requirement": ["Required", "Required", "Required", "Optional", "Optional"],
+        "Description": [
+            "Dealer code used in rebuild file, such as A000 or B123.",
+            "Calendar/service year for the labor rate.",
+            "Dealer labor rate for that service year. Must be positive numeric.",
+            "Currency code for the rate. Default expected value is USD.",
+            "Optional user notes for auditability.",
+        ]
+    })
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        template.to_excel(writer, sheet_name="Dealer Rates", index=False)
+        instructions.to_excel(writer, sheet_name="Instructions", index=False)
+        apply_excel_brand_formatting(writer.book)
+    output.seek(0)
+    return output.getvalue()
+
 
 # =====================================================
 # PRE-RUN VALIDATION / UI
@@ -821,6 +965,10 @@ def build_machine_export(selected_machine, analysis):
         exceptions_summary.to_excel(writer, sheet_name="Exceptions", index=False)
         outlier_perf.to_excel(writer, sheet_name="Outlier Performance", index=False)
         cross_rows.to_excel(writer, sheet_name="Cross Type Flags", index=False)
+        machine_rate_exceptions = machine_all[machine_all.get("Dealer Rate Exception Flag", "") != ""].copy() if "Dealer Rate Exception Flag" in machine_all.columns else pd.DataFrame()
+        if machine_rate_exceptions.empty:
+            machine_rate_exceptions = pd.DataFrame({"Message": ["No dealer rate exceptions detected for this machine."]})
+        machine_rate_exceptions.to_excel(writer, sheet_name="Rate Exceptions", index=False)
         run_metadata.to_excel(writer, sheet_name="Run Metadata", index=False)
         methodology.to_excel(writer, sheet_name="Methodology", index=False)
         cpi_export.to_excel(writer, sheet_name="BLS CPI", index=False)
@@ -858,12 +1006,50 @@ dealer_rate_currency_mode = st.selectbox("Dealer labor rate currency", ["USD", "
 
 st.subheader("Dealer Labor Rates")
 use_default = st.checkbox("Use Built-in Default Dealer Rates", True)
+rate_file = None
+rate_file_format = "Auto-detect"
+rate_fallback_behavior = "Use yearly average fallback (recommended)"
+
+st.download_button(
+    "Download Dealer Rate Template",
+    data=create_dealer_rate_template(),
+    file_name="Dealer_Rate_Template.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+
 if use_default:
     st.warning("Default dealer rates are being used. For production analysis, upload the official dealer-by-year rate workbook.")
-rate_file = None
-if not use_default:
-    rate_file = st.file_uploader("Upload Custom Dealer-by-Year Rate Workbook", type=["xlsx"])
+else:
+    rate_file_format = st.selectbox(
+        "Dealer rate file format",
+        ["Auto-detect", "Flat Table", "Multi-Sheet Dealer Workbook"],
+        index=0,
+        help="Recommended format is Flat Table with Dealer Code, Service Year, Rate, optional Rate Currency, and Notes.",
+    )
+    rate_fallback_behavior = st.selectbox(
+        "Missing dealer-year rate fallback behavior",
+        [
+            "Use yearly average fallback (recommended)",
+            "Use overall average fallback",
+            "Use built-in default fallback",
+            "Stop analysis if dealer-year rate is missing",
+        ],
+        index=0,
+        help="Recommended default uses the uploaded rate file's yearly average when a dealer-year match is missing, and flags the row.",
+    )
+    rate_file = st.file_uploader("Upload Custom Dealer Labor Rate Workbook", type=["xlsx"])
     validate_uploaded_file_security(rate_file)
+    if rate_file:
+        try:
+            preview_rates = build_rate_table_from_workbook(rate_file, rate_file_format)
+            st.write("### Dealer Rate Upload Validation")
+            display_table(validate_dealer_rate_table(preview_rates), number_cols=["Value"])
+            st.write("### Dealer Rate Preview")
+            display_table(preview_rates.head(50), currency_cols=["Rate"], number_cols=["Service Year"])
+            st.caption("Preferred flat table columns: Dealer Code, Service Year, Rate, Rate Currency, Notes. Legacy multi-sheet dealer workbooks are still supported.")
+        except Exception as exc:
+            st.error(f"Unable to parse dealer rate workbook: {exc}")
+            st.stop()
 
 apply_inflation = st.checkbox("Apply BLS CPI-U Inflation", True)
 base_year = st.number_input("Base Year for Inflation", 2010, 2030, 2026)
@@ -948,18 +1134,56 @@ def run_analysis(rebuild_file, rate_file):
     df["FX Source"] = df["FX Source"].fillna("USD/no FX conversion")
     fallback_fx_count = int((df["FX Source"] == "Embedded fallback FX table").sum())
 
-    rate_df = build_default_rate_table(2010, 2030) if (use_default or rate_file is None) else build_rate_table_from_workbook(rate_file)
+    if use_default or rate_file is None:
+        rate_df = build_default_rate_table(2010, 2030)
+        rate_file_mode = "Built-in Default Dealer Rates"
+        effective_fallback_behavior = "Built-in default rates"
+    else:
+        rate_df = build_rate_table_from_workbook(rate_file, rate_file_format)
+        if rate_df.empty:
+            raise ValueError("Custom dealer rate workbook did not contain any valid dealer-year rates. Use the downloadable template or select the correct rate format.")
+        rate_file_mode = rate_file_format
+        effective_fallback_behavior = rate_fallback_behavior
+
     rate_df["Service Year"] = pd.to_numeric(rate_df["Service Year"], errors="coerce").astype("Int64")
+    rate_df["Rate"] = pd.to_numeric(rate_df["Rate"], errors="coerce")
     df = df.merge(rate_df, how="left", on=["Dealer Code", "Service Year"])
-    yearly_avg = rate_df.groupby("Service Year")["Rate"].mean()
-    overall_avg = rate_df["Rate"].mean()
     df["Rate Source"] = "Dealer-Year Rate"
+    df["Dealer Rate Exception Flag"] = ""
     missing_dealer_year = df["Rate"].isna()
-    df.loc[missing_dealer_year, "Rate"] = df.loc[missing_dealer_year, "Service Year"].map(yearly_avg)
-    df.loc[missing_dealer_year, "Rate Source"] = "Global Yearly Fallback Rate"
+    df.loc[missing_dealer_year, "Dealer Rate Exception Flag"] = "Missing dealer-year labor rate"
+
+    if missing_dealer_year.any() and effective_fallback_behavior == "Stop analysis if dealer-year rate is missing":
+        missing_count = int(missing_dealer_year.sum())
+        raise ValueError(f"{missing_count} rows are missing dealer-year labor rates. Upload a complete rate file or choose a fallback behavior.")
+
+    if missing_dealer_year.any():
+        if effective_fallback_behavior == "Use built-in default fallback":
+            default_rates = build_default_rate_table(2010, 2030).set_index("Service Year")["Rate"]
+            df.loc[missing_dealer_year, "Rate"] = df.loc[missing_dealer_year, "Service Year"].map(default_rates)
+            df.loc[missing_dealer_year, "Rate Source"] = "Built-in Default Fallback Rate"
+        elif effective_fallback_behavior == "Use overall average fallback":
+            overall_avg = rate_df["Rate"].mean()
+            df.loc[missing_dealer_year, "Rate"] = overall_avg
+            df.loc[missing_dealer_year, "Rate Source"] = "Overall Average Fallback Rate"
+        else:
+            yearly_avg = rate_df.groupby("Service Year")["Rate"].mean()
+            df.loc[missing_dealer_year, "Rate"] = df.loc[missing_dealer_year, "Service Year"].map(yearly_avg)
+            df.loc[missing_dealer_year, "Rate Source"] = "Global Yearly Fallback Rate"
+            still_missing = df["Rate"].isna()
+            if still_missing.any():
+                overall_avg = rate_df["Rate"].mean()
+                df.loc[still_missing, "Rate"] = overall_avg
+                df.loc[still_missing, "Rate Source"] = "Overall Average Fallback Rate"
+                df.loc[still_missing, "Dealer Rate Exception Flag"] = "Missing dealer-year and service-year average labor rate"
+
     missing_overall = df["Rate"].isna()
-    df.loc[missing_overall, "Rate"] = overall_avg
-    df.loc[missing_overall, "Rate Source"] = "Overall Average Fallback Rate"
+    if missing_overall.any():
+        fallback_rate = build_default_rate_table(2010, 2030)["Rate"].mean()
+        df.loc[missing_overall, "Rate"] = fallback_rate
+        df.loc[missing_overall, "Rate Source"] = "Emergency Built-in Overall Fallback Rate"
+        df.loc[missing_overall, "Dealer Rate Exception Flag"] = "Emergency fallback labor rate used"
+
     df["Base Rate Year Used"] = df["Service Year"]
     df["Avg Base Rate Used"] = df["Rate"]
 
@@ -1039,9 +1263,9 @@ def run_analysis(rebuild_file, rate_file):
     adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
     rebuild_reference = pd.DataFrame([{"CCR TYPE": key, "Description": value} for key, value in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
-    metadata = pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col]})
-    data_quality_summary = pd.DataFrame({"Metric": ["Missing Service Date", "Missing Dealer Code", "Missing Parts DN", "Missing Labor Hours", "SMU 0 or 1", "Unknown/Other Regions", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate"], "Value": [missing_service_date_count, missing_dealer_code_count, missing_parts_count, missing_labor_hours_count, int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), unknown_region_count, fallback_fx_count, int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), int((df["Rate Source"] == "Overall Average Fallback Rate").sum())]})
-    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum())}
+    metadata = pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Default" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique()]})
+    data_quality_summary = pd.DataFrame({"Metric": ["Missing Service Date", "Missing Dealer Code", "Missing Parts DN", "Missing Labor Hours", "SMU 0 or 1", "Unknown/Other Regions", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate", "Rows Using Built-in Default Fallback Rate", "Dealer Rate Exception Rows"], "Value": [missing_service_date_count, missing_dealer_code_count, missing_parts_count, missing_labor_hours_count, int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), unknown_region_count, fallback_fx_count, int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), int((df["Rate Source"] == "Built-in Default Fallback Rate").sum()), int((df["Dealer Rate Exception Flag"] != "").sum())]})
+    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior}
 
 # =====================================================
 # RENDER RESULTS
@@ -1075,6 +1299,11 @@ if st.session_state.run_clicked and rebuild_file:
     insufficient_count = analysis["insufficient_count"]
     global_year_fallback_count = analysis["global_year_fallback_count"]
     overall_fallback_count = analysis["overall_fallback_count"]
+    rate_df = analysis.get("rate_df", pd.DataFrame())
+    dealer_rate_validation = analysis.get("dealer_rate_validation", pd.DataFrame())
+    dealer_rate_exception_rows = analysis.get("dealer_rate_exception_rows", pd.DataFrame())
+    rate_file_mode = analysis.get("rate_file_mode", "Unknown")
+    effective_fallback_behavior = analysis.get("effective_fallback_behavior", "Unknown")
 
     tabs = st.tabs(["Executive Dashboard", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Executive Insights", "Methodology", "Reference"])
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = tabs
@@ -1205,6 +1434,21 @@ if st.session_state.run_clicked and rebuild_file:
         st.dataframe(exception_summary, use_container_width=True)
         st.write("### Data Quality Summary")
         st.dataframe(data_quality_summary, use_container_width=True)
+        st.write("### Dealer Rate Upload Validation")
+        if not dealer_rate_validation.empty:
+            display_table(dealer_rate_validation, number_cols=["Value"])
+        else:
+            st.write("No dealer rate validation table available.")
+        st.write("### Dealer Rate Exception Rows")
+        if not dealer_rate_exception_rows.empty:
+            display_table(dealer_rate_exception_rows, currency_cols=["Rate", "Rate USD", "Labor Cost USD", "Adjusted Total Cost USD", "Inflation-Adjusted Adjusted Total Cost USD"], smu_cols=["SMU AT REBUILD"], year_cols=["Service Year"])
+        else:
+            st.write("No dealer rate exception rows detected.")
+        st.write("### Uploaded Dealer Rates Used")
+        if not rate_df.empty:
+            display_table(rate_df.head(200), currency_cols=["Rate"], number_cols=["Service Year"])
+        else:
+            st.write("No uploaded/custom dealer rate table available.")
         st.write("### Outlier Performance by Machine + Rebuild Type")
         outlier_perf_all = df.groupby(["SALES MODEL", "CCR TYPE"]).agg(Total_Rows=(cost_col, "count"), Outlier_Rows=("Outlier", "sum"), Avg_Cost_All=(cost_col, "mean")).reset_index()
         outlier_perf_all["Outlier Rate %"] = (outlier_perf_all["Outlier_Rows"] / outlier_perf_all["Total_Rows"]) * 100
@@ -1248,7 +1492,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V15.7 addition:** Includes V15.4 single-machine workbook export, Confidential Yellow security controls, Excel formula-injection sanitization, export authorization acknowledgement, file-size/type validation, clear-session reset, and row highlighting for outliers/cross-type exceptions/insufficient-sample rows.""")
+**V15.8 addition:** Includes V15.4 single-machine workbook export, Confidential Yellow security controls, Excel formula-injection sanitization, export authorization acknowledgement, file-size/type validation, clear-session reset, row highlighting for outliers/cross-type exceptions/insufficient-sample rows, and enhanced dealer labor rate upload with flat-table template, legacy multi-sheet support, validation preview, and configurable missing-rate fallback.""")
 
     with tab8:
         st.subheader("Configured Rebuild Types and Regions")
@@ -1268,6 +1512,9 @@ if st.session_state.run_clicked and rebuild_file:
         adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
         exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
         data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
+        dealer_rate_validation.to_excel(writer, sheet_name="Rate Validation", index=False)
+        dealer_rate_exception_rows.to_excel(writer, sheet_name="Rate Exceptions", index=False)
+        rate_df.to_excel(writer, sheet_name="Dealer Rates Used", index=False)
         outlier_perf_all.to_excel(writer, sheet_name="Outlier Performance", index=False)
         cross_rows.to_excel(writer, sheet_name="Cross Type Flags", index=False)
         df[df["Outlier"] == True].to_excel(writer, sheet_name="Outlier Rows", index=False)
