@@ -14,13 +14,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.1"
+APP_VERSION = "V16.1.1"
 APP_LAST_UPDATED = "2026-06-30"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Confidential Yellow Phase 1"
-EXPORT_FORMAT_VERSION = "V16.1 Governance + Future-Proofing"
+EXPORT_FORMAT_VERSION = "V16.1.1 Governance Stability Patch"
 CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -453,7 +453,7 @@ def build_run_readiness_summary(processed_df, rate_coverage_summary, data_qualit
     rows.append({"Readiness Check": "Rows After Filters", "Status": "Ready" if row_count > 0 else "Cannot Run", "Details": f"{row_count:,} processed row(s) available."})
     try:
         pct = float(rate_coverage_summary.loc[rate_coverage_summary["Metric"] == "Dealer-Year Match Rate %", "Value"].iloc[0])
-        rows.append({"Readiness Check": "Dealer Rate Coverage", "Status": "Ready" if pct >= 95 else "Needs Review", "Details": f"Dealer-year match rate is {pct}%."})
+        rows.append({"Readiness Check": "Dealer Rate Coverage", "Status": "Ready" if pct >= float(globals().get("dealer_rate_coverage_warning_threshold", 95.0)) else "Needs Review", "Details": f"Dealer-year match rate is {pct}%."})
     except Exception:
         rows.append({"Readiness Check": "Dealer Rate Coverage", "Status": "Needs Review", "Details": "Coverage could not be calculated."})
     try:
@@ -507,13 +507,18 @@ def build_executive_narrative(valid_df, summary_df, cost_col, outlier_count, cro
     return lines
 
 
-def build_cover_sheet(metadata, readiness, dq_score, rate_cov, export_mode="Full Analysis Workbook", export_reason="Not provided"):
+def build_cover_sheet(metadata, readiness, dq_score, rate_cov, export_mode="Full Analysis Workbook", export_reason="Not provided", scenario_name_value=None, user_role_view_value="Analyst", strict_mode_value=False):
+    """Create a cover sheet without relying on UI globals, so template/export utilities can reuse it safely."""
     def look(table, key, default=""):
         try:
-            return table.loc[table.iloc[:,0] == key, table.columns[1]].iloc[0]
+            return table.loc[table.iloc[:, 0] == key, table.columns[1]].iloc[0]
         except Exception:
             return default
-    return pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "Export Timestamp", "Export Mode", "Export Reason", "Scenario Name", "User Role View", "Strict Mode", "Overall Run Readiness", "Data Quality Score", "Data Quality Label", "Dealer Rate Coverage Score", "Dealer-Year Match Rate %", "Highlight Legend"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), export_mode, export_reason, scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", look(readiness, "Overall Run Readiness", "Unknown"), look(dq_score, "Data Quality Score", "Unknown"), look(dq_score, "Data Quality Label", "Unknown"), look(rate_cov, "Dealer Rate Coverage Score", "Unknown"), look(rate_cov, "Dealer-Year Match Rate %", "Unknown"), "Red = cost outlier; orange = cross-type exception; yellow = insufficient sample group."]})
+    safe_scenario = scenario_name_value if scenario_name_value else "Not provided"
+    return pd.DataFrame({
+        "Field": ["Confidentiality Label", "App Version", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "Export Timestamp", "Export Mode", "Export Reason", "Scenario Name", "User Role View", "Strict Mode", "Overall Run Readiness", "Data Quality Score", "Data Quality Label", "Dealer Rate Coverage Score", "Dealer-Year Match Rate %", "Highlight Legend"],
+        "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), export_mode, export_reason, safe_scenario, user_role_view_value, "Yes" if strict_mode_value else "No", look(readiness, "Overall Run Readiness", "Unknown"), look(dq_score, "Data Quality Score", "Unknown"), look(dq_score, "Data Quality Label", "Unknown"), look(rate_cov, "Dealer Rate Coverage Score", "Unknown"), look(rate_cov, "Dealer-Year Match Rate %", "Unknown"), "Red = cost outlier; orange = cross-type exception; yellow = insufficient sample group."]
+    })
 
 
 
@@ -666,14 +671,23 @@ def build_performance_safeguard_summary(source_rows, processed_rows):
     return pd.DataFrame(warnings)
 
 
-def apply_confidential_watermark(workbook):
-    """Add a visible Confidential Yellow label to the top of each worksheet."""
+def apply_confidential_watermark(workbook, scenario_name_value=None):
+    """Add a visible Confidential Yellow label to the top of each worksheet.
+
+    Scope-safe and idempotent: this function can be called before Streamlit UI
+    variables exist, and repeated calls will not keep inserting new rows.
+    """
     watermark_fill = PatternFill(start_color="FFC500", end_color="FFC500", fill_type="solid")
     watermark_font = Font(color="000000", bold=True)
+    scenario_label = scenario_name_value if scenario_name_value else "Unnamed Scenario"
+    label = f"{CONFIDENTIALITY_LABEL} | {APP_VERSION} | {scenario_label}"
     for ws in workbook.worksheets:
-        ws.insert_rows(1)
-        label = f"{CONFIDENTIALITY_LABEL} | {APP_VERSION} | {scenario_name if scenario_name else 'Unnamed Scenario'}"
-        ws.cell(row=1, column=1).value = label
+        first_cell_value = str(ws.cell(row=1, column=1).value or "")
+        if first_cell_value.startswith(CONFIDENTIALITY_LABEL):
+            ws.cell(row=1, column=1).value = label
+        else:
+            ws.insert_rows(1)
+            ws.cell(row=1, column=1).value = label
         ws.cell(row=1, column=1).fill = watermark_fill
         ws.cell(row=1, column=1).font = watermark_font
         try:
@@ -1085,9 +1099,8 @@ def create_dealer_rate_template():
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         template.to_excel(writer, sheet_name="Dealer Rates", index=False)
         instructions.to_excel(writer, sheet_name="Instructions", index=False)
-        apply_confidential_watermark(writer.book)
-        apply_confidential_watermark(writer.book)
         apply_excel_brand_formatting(writer.book)
+        apply_confidential_watermark(writer.book)
     output.seek(0)
     return output.getvalue()
 
@@ -1310,6 +1323,7 @@ def build_machine_export(selected_machine, analysis):
         cpi_export.to_excel(writer, sheet_name="BLS CPI", index=False)
         fx_lookup.to_excel(writer, sheet_name="FX Rates", index=False)
         apply_excel_brand_formatting(writer.book)
+        apply_confidential_watermark(writer.book, globals().get("scenario_name", None))
     output.seek(0)
     return output.getvalue()
 
@@ -1354,7 +1368,11 @@ st.download_button(
 )
 
 if use_default:
-    st.warning("Built-in expanded dealer base rates 2016-2026 are being used from the bundled workbook. You can still upload a custom dealer labor rate workbook if needed.")
+    built_in_rate_file_available = Path("expanded_dealer_base_rate_by_year_2016_2026.xlsx").exists()
+    if built_in_rate_file_available:
+        st.warning("Built-in expanded dealer base rates 2016-2026 are being used from the bundled workbook. You can still upload a custom dealer labor rate workbook if needed.")
+    else:
+        st.error("Built-in dealer-rate workbook is missing from the app folder. The app can still run using emergency generic fallback rates, but production analysis should not rely on that fallback.")
 else:
     rate_file_format = st.selectbox(
         "Dealer rate file format",
@@ -1415,6 +1433,9 @@ export_reason_other = ""
 if export_reason == "Other":
     export_reason_other = st.text_input("Describe export reason", "")
 export_reason_final = export_reason_other.strip() if export_reason == "Other" and export_reason_other.strip() else export_reason
+if user_role_view == "Viewer" and export_mode != "Summary Only":
+    st.warning("Viewer role view is intended for limited distribution. Export mode has been changed to Summary Only for this session.")
+    export_mode = "Summary Only"
 
 if rebuild_file:
     with st.expander("Pre-Run Data Validation", expanded=True):
@@ -1927,7 +1948,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.1 addition:** Adds known limitations, data dictionary, Strict Mode, manually configurable thresholds with methodology-preserving defaults, scenario naming, saved parameter summary, advisory role-based export design, Confidential Yellow watermarks, and performance safeguards.""")
+**V16.1.1 stability patch:** Fixes scope-safe workbook watermarking, removes duplicate template watermarking, applies export watermarks reliably, adds built-in rate workbook availability warning, and keeps V16.1 governance/future-proofing controls.""")
 
     with tab9:
         st.subheader("Governance & Data Dictionary")
@@ -1958,7 +1979,17 @@ if st.session_state.run_clicked and rebuild_file:
         metadata.copy(),
         pd.DataFrame({"Field": ["Export Mode", "Export Reason", "Scenario Name", "User Role View", "Strict Mode", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version"], "Value": [export_mode, export_reason_final, scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION]}),
     ], ignore_index=True)
-    cover_sheet = build_cover_sheet(export_metadata, run_readiness_summary, data_quality_score_summary, dealer_rate_coverage_summary, export_mode, export_reason_final)
+    cover_sheet = build_cover_sheet(
+        export_metadata,
+        run_readiness_summary,
+        data_quality_score_summary,
+        dealer_rate_coverage_summary,
+        export_mode,
+        export_reason_final,
+        scenario_name_value=scenario_name,
+        user_role_view_value=user_role_view,
+        strict_mode_value=strict_mode,
+    )
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         cover_sheet.to_excel(writer, sheet_name="Cover Page", index=False)
         export_metadata.to_excel(writer, sheet_name="Run Metadata", index=False)
@@ -2014,6 +2045,7 @@ if st.session_state.run_clicked and rebuild_file:
             for machine in valid["SALES MODEL"].dropna().unique():
                 valid[valid["SALES MODEL"] == machine].to_excel(writer, sheet_name=safe_sheet_name(machine), index=False)
         apply_excel_brand_formatting(writer.book)
+        apply_confidential_watermark(writer.book, scenario_name)
     if render_export_acknowledgement("full_export_ack"):
         safe_scenario = re.sub(r"[^A-Za-z0-9_-]+", "_", scenario_name.strip()) if scenario_name else "Scenario"
         st.download_button("Download Workbook", data=output.getvalue(), file_name=f"Rebuild_Analysis_{safe_scenario}_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
