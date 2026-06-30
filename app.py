@@ -14,15 +14,16 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.0"
-APP_LAST_UPDATED = "2026-06-29"
+APP_VERSION = "V16.1"
+APP_LAST_UPDATED = "2026-06-30"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Confidential Yellow Phase 1"
-EXPORT_FORMAT_VERSION = "V16 Workbook Cover + Export Modes"
+EXPORT_FORMAT_VERSION = "V16.1 Governance + Future-Proofing"
 CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
 MAX_UPLOAD_MB = 50
+DEFAULT_MAX_ROWS_WARNING = 25000
 
 st.set_page_config(layout="wide", page_title="Rebuild Analytics Platform")
 
@@ -157,6 +158,7 @@ METHOD_LOCK_TEXT = """
 - **SMU:** SMU 0 or 1 is a data-quality flag only; SMU is not used as a statistical outlier basis.
 - **Cross-type review:** CPT+H rows are flagged when above machine-level valid CMR median × 1.10, only when at least 3 valid CMR rows exist.
 - **Adjusted CPT+H:** Adjusted averages exclude cross-type flagged CPT+H rows only; CMR and CPT-O remain unchanged.
+- **V16.1 controls:** Strict Mode and configurable thresholds are optional governance controls; defaults preserve the locked methodology unless manually changed.
 """
 
 if "run_clicked" not in st.session_state:
@@ -511,7 +513,197 @@ def build_cover_sheet(metadata, readiness, dq_score, rate_cov, export_mode="Full
             return table.loc[table.iloc[:,0] == key, table.columns[1]].iloc[0]
         except Exception:
             return default
-    return pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "Export Timestamp", "Export Mode", "Export Reason", "Overall Run Readiness", "Data Quality Score", "Data Quality Label", "Dealer Rate Coverage Score", "Dealer-Year Match Rate %", "Highlight Legend"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), export_mode, export_reason, look(readiness, "Overall Run Readiness", "Unknown"), look(dq_score, "Data Quality Score", "Unknown"), look(dq_score, "Data Quality Label", "Unknown"), look(rate_cov, "Dealer Rate Coverage Score", "Unknown"), look(rate_cov, "Dealer-Year Match Rate %", "Unknown"), "Red = cost outlier; orange = cross-type exception; yellow = insufficient sample group."]})
+    return pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "Export Timestamp", "Export Mode", "Export Reason", "Scenario Name", "User Role View", "Strict Mode", "Overall Run Readiness", "Data Quality Score", "Data Quality Label", "Dealer Rate Coverage Score", "Dealer-Year Match Rate %", "Highlight Legend"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), export_mode, export_reason, scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", look(readiness, "Overall Run Readiness", "Unknown"), look(dq_score, "Data Quality Score", "Unknown"), look(dq_score, "Data Quality Label", "Unknown"), look(rate_cov, "Dealer Rate Coverage Score", "Unknown"), look(rate_cov, "Dealer-Year Match Rate %", "Unknown"), "Red = cost outlier; orange = cross-type exception; yellow = insufficient sample group."]})
+
+
+
+# =====================================================
+# V16.1 GOVERNANCE / FUTURE-PROOFING HELPERS
+# =====================================================
+def build_known_limitations_table():
+    return pd.DataFrame({
+        "Known Limitation": [
+            "Adjusted CPT+H dependency",
+            "Dealer code dependency",
+            "Labor-hour dependency",
+            "SMU handling",
+            "FX fallback",
+            "Built-in dealer rate workbook dependency",
+            "Outlier scope",
+            "Cross-type scope",
+            "Security scope",
+        ],
+        "Details": [
+            "Adjusted CPT+H outputs require both CMR and CPT+H records in the relevant scope.",
+            "Dealer labor-rate matching depends on detecting a valid four-character dealer code from the DEALER field.",
+            "Rows with missing REBUILD WORK HRS cannot be used for adjusted labor-cost analysis.",
+            "SMU values of 0 or 1 are data-quality flags only; SMU is not used for statistical outlier removal.",
+            "If live FX retrieval fails, embedded fallback FX rates may be used and flagged.",
+            "The expanded built-in dealer-rate workbook must be deployed next to app.py; otherwise emergency generic rates are used.",
+            "Cost outliers are detected by Machine + CCR TYPE using log(cost) IQR logic only.",
+            "CPT+H cross-type review requires at least 3 valid CMR rows for the same machine.",
+            "Confidential Yellow labeling and acknowledgements support governance but do not replace enterprise authentication/authorization.",
+        ],
+    })
+
+
+def build_data_dictionary_table():
+    return pd.DataFrame({
+        "Field": [
+            "Adjusted Total Cost USD",
+            "Inflation-Adjusted Adjusted Total Cost USD",
+            "PARTS DN USD",
+            "Labor Cost USD",
+            "Rate Source",
+            "Dealer Rate Exception Flag",
+            "Outlier",
+            "Outlier Reason",
+            "Insufficient Sample Group",
+            "Cross-Type Exception Flag",
+            "CMR Benchmark Cost",
+            "Data Quality Exception Flag",
+            "Dealer-Year Match Rate %",
+            "Data Quality Score",
+            "Machine Priority Score",
+        ],
+        "Definition": [
+            "PARTS DN converted to USD plus labor cost converted/calculated in USD.",
+            "Adjusted Total Cost USD after component-level CPI inflation adjustment to the selected base year.",
+            "PARTS DN multiplied by the source-currency FX-to-USD rate.",
+            "REBUILD WORK HRS multiplied by the dealer service-year labor rate in USD.",
+            "Indicates whether a direct dealer-year rate or fallback rate was used.",
+            "Flags rows where the dealer-year labor-rate match was missing or fallback logic was required.",
+            "Boolean flag identifying rows excluded from average calculations by cost outlier logic.",
+            "Text explanation for statistical cost outlier or insufficient-sample handling.",
+            "TRUE when Machine + CCR TYPE has fewer than 5 rows; no statistical cost outlier removal is applied.",
+            "Flags CPT+H rows above machine-level valid CMR median × configured threshold when enough CMR rows exist.",
+            "Machine-level valid non-outlier CMR median cost used for CPT+H review.",
+            "Flags data-quality issues such as SMU 0 or 1.",
+            "Percent of processed rows that used a direct dealer-year labor-rate match.",
+            "Composite score summarizing major data-quality risks for the run.",
+            "Decision-support score ranking machines by cost position, outliers, dealer-rate exceptions, and cross-type flags.",
+        ],
+    })
+
+
+def build_parameter_summary_table():
+    return pd.DataFrame({
+        "Parameter": [
+            "Scenario Name",
+            "User Role View",
+            "Strict Mode Enabled",
+            "Maximum Row Warning Threshold",
+            "Dealer Rate Coverage Warning Threshold %",
+            "Dealer Rate Coverage Strict Threshold %",
+            "Data Quality Strict Minimum Score",
+            "Cross-Type Threshold Multiplier",
+            "Minimum CMR Rows for CPT+H Benchmark",
+            "Machine Filter",
+            "Start Year",
+            "End Year",
+            "Base Year",
+            "Rebuild Type Filter",
+            "Region Filter",
+            "Inflation Applied",
+            "Dealer Rate Source",
+            "Export Mode",
+            "Export Reason",
+        ],
+        "Value": [
+            scenario_name if scenario_name else "Not provided",
+            user_role_view,
+            "Yes" if strict_mode else "No",
+            max_rows_warning_threshold,
+            dealer_rate_coverage_warning_threshold,
+            dealer_rate_coverage_strict_threshold,
+            data_quality_strict_min_score,
+            cross_type_threshold_multiplier,
+            min_cmr_rows_for_benchmark,
+            machine_input if machine_input else "All",
+            start_year,
+            end_year,
+            base_year,
+            ", ".join(rebuild_filter),
+            ", ".join(region_filter),
+            "Yes" if apply_inflation else "No",
+            "Built-in Expanded Dealer Rates" if use_default else "Uploaded Custom Dealer Rates",
+            export_mode,
+            export_reason_final,
+        ],
+    })
+
+
+def build_role_policy_table():
+    return pd.DataFrame({
+        "Role View": ["Viewer", "Analyst", "Admin"],
+        "Intended Capability": [
+            "Dashboard and read-only review. Export controls should be limited in a secured deployment.",
+            "Analysis review plus selected-machine and standard export workflows.",
+            "Full export and advanced configuration review. Enterprise authentication should enforce this in production.",
+        ],
+        "Current App Behavior": [
+            "Role is advisory only unless enterprise authentication is added.",
+            "Role is advisory only unless enterprise authentication is added.",
+            "Role is advisory only unless enterprise authentication is added.",
+        ],
+    })
+
+
+def build_performance_safeguard_summary(source_rows, processed_rows):
+    warnings = []
+    if source_rows > max_rows_warning_threshold:
+        warnings.append({"Safeguard": "Source Row Count", "Status": "Review", "Details": f"Source workbook contains {source_rows:,} rows, above threshold {max_rows_warning_threshold:,}. Consider Summary Only export if performance is slow."})
+    else:
+        warnings.append({"Safeguard": "Source Row Count", "Status": "OK", "Details": f"Source workbook contains {source_rows:,} rows."})
+    if processed_rows > max_rows_warning_threshold:
+        warnings.append({"Safeguard": "Processed Row Count", "Status": "Review", "Details": f"Processed data contains {processed_rows:,} rows. Large raw-data export may take longer."})
+    else:
+        warnings.append({"Safeguard": "Processed Row Count", "Status": "OK", "Details": f"Processed data contains {processed_rows:,} rows."})
+    if export_mode == "Full Analysis Workbook" and processed_rows > max_rows_warning_threshold:
+        warnings.append({"Safeguard": "Export Mode", "Status": "Review", "Details": "Full Analysis Workbook selected for a large run. Summary Only or Exceptions Only may be more efficient."})
+    else:
+        warnings.append({"Safeguard": "Export Mode", "Status": "OK", "Details": f"Selected export mode: {export_mode}."})
+    return pd.DataFrame(warnings)
+
+
+def apply_confidential_watermark(workbook):
+    """Add a visible Confidential Yellow label to the top of each worksheet."""
+    watermark_fill = PatternFill(start_color="FFC500", end_color="FFC500", fill_type="solid")
+    watermark_font = Font(color="000000", bold=True)
+    for ws in workbook.worksheets:
+        ws.insert_rows(1)
+        label = f"{CONFIDENTIALITY_LABEL} | {APP_VERSION} | {scenario_name if scenario_name else 'Unnamed Scenario'}"
+        ws.cell(row=1, column=1).value = label
+        ws.cell(row=1, column=1).fill = watermark_fill
+        ws.cell(row=1, column=1).font = watermark_font
+        try:
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(ws.max_column, 1))
+        except Exception:
+            pass
+        ws.freeze_panes = "A3"
+
+
+def evaluate_strict_mode(run_readiness_summary, dealer_rate_coverage_summary, data_quality_score_summary, processed_rows):
+    """Raise a clear error when Strict Mode is enabled and configured thresholds are not met."""
+    if not strict_mode:
+        return
+    issues = []
+    try:
+        coverage = float(dealer_rate_coverage_summary.loc[dealer_rate_coverage_summary["Metric"] == "Dealer-Year Match Rate %", "Value"].iloc[0])
+        if coverage < float(dealer_rate_coverage_strict_threshold):
+            issues.append(f"Dealer-year match rate is {coverage:.1f}%, below strict threshold {dealer_rate_coverage_strict_threshold:.1f}%.")
+    except Exception:
+        issues.append("Dealer-year match rate could not be evaluated.")
+    try:
+        dq_score = float(data_quality_score_summary.loc[data_quality_score_summary["Metric"] == "Data Quality Score", "Value"].iloc[0])
+        if dq_score < float(data_quality_strict_min_score):
+            issues.append(f"Data Quality Score is {dq_score:.1f}, below strict threshold {data_quality_strict_min_score:.1f}.")
+    except Exception:
+        issues.append("Data Quality Score could not be evaluated.")
+    if processed_rows > max_rows_warning_threshold * 2:
+        issues.append(f"Processed rows ({processed_rows:,}) exceed 2× the row warning threshold ({max_rows_warning_threshold:,}).")
+    if issues:
+        raise ValueError("Strict Mode stopped the analysis: " + " ".join(issues))
 
 
 # =====================================================
@@ -893,6 +1085,8 @@ def create_dealer_rate_template():
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         template.to_excel(writer, sheet_name="Dealer Rates", index=False)
         instructions.to_excel(writer, sheet_name="Instructions", index=False)
+        apply_confidential_watermark(writer.book)
+        apply_confidential_watermark(writer.book)
         apply_excel_brand_formatting(writer.book)
     output.seek(0)
     return output.getvalue()
@@ -1201,6 +1395,19 @@ end_year = st.number_input("End Year", 2010, 2030, 2026)
 rebuild_filter = st.multiselect("Filter Rebuild Types", options=list(CERTIFIED_REBUILD_TYPES.keys()), default=["CMR", "CPT+H", "CPT-O"])
 region_filter = st.multiselect("Filter Regions", options=VALID_REGIONS + ["UNKNOWN", "OTHER"], default=VALID_REGIONS + ["UNKNOWN", "OTHER"])
 
+st.subheader("Scenario, Governance, and Future-Proof Controls")
+scenario_name = st.text_input("Analysis Scenario Name", "")
+user_role_view = st.selectbox("Role view / intended user type", ["Analyst", "Viewer", "Admin"], index=0, help="Advisory only unless enterprise authentication is added.")
+strict_mode = st.checkbox("Strict Mode: stop analysis when configured quality thresholds are not met", False)
+with st.expander("Advanced Threshold Configuration", expanded=False):
+    st.caption("Defaults preserve the current methodology. Change these only when there is a business-approved reason.")
+    cross_type_threshold_multiplier = st.number_input("CPT+H cross-type threshold multiplier", min_value=1.00, max_value=2.00, value=1.10, step=0.01)
+    min_cmr_rows_for_benchmark = st.number_input("Minimum valid CMR rows for CPT+H benchmark", min_value=1, max_value=20, value=3, step=1)
+    dealer_rate_coverage_warning_threshold = st.number_input("Dealer rate coverage warning threshold %", min_value=0.0, max_value=100.0, value=95.0, step=1.0)
+    dealer_rate_coverage_strict_threshold = st.number_input("Dealer rate coverage strict threshold %", min_value=0.0, max_value=100.0, value=80.0, step=1.0)
+    data_quality_strict_min_score = st.number_input("Strict Mode minimum data quality score", min_value=0.0, max_value=100.0, value=75.0, step=1.0)
+    max_rows_warning_threshold = st.number_input("Large-run row warning threshold", min_value=1000, max_value=250000, value=DEFAULT_MAX_ROWS_WARNING, step=1000)
+
 st.subheader("Export Controls")
 export_mode = st.selectbox("Full workbook export mode", ["Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit"], index=0)
 export_reason = st.selectbox("Export reason", ["Manager review", "Dealer review", "Cost benchmarking", "Data validation", "Presentation support", "Other"], index=0)
@@ -1402,10 +1609,10 @@ def run_analysis(rebuild_file, rate_file):
     df["CMR Benchmark Cost"] = np.nan
     for machine, group in df.groupby("SALES MODEL", dropna=False):
         cmr_valid = group[(group["CCR TYPE"] == "CMR") & (group["Outlier"] == False)]
-        if len(cmr_valid) >= 3:
+        if len(cmr_valid) >= int(min_cmr_rows_for_benchmark):
             benchmark = cmr_valid[cost_col].median()
             df.loc[group.index, "CMR Benchmark Cost"] = benchmark
-            mask = group["CCR TYPE"].eq("CPT+H") & group["Outlier"].eq(False) & (group[cost_col] > benchmark * 1.10)
+            mask = group["CCR TYPE"].eq("CPT+H") & group["Outlier"].eq(False) & (group[cost_col] > benchmark * float(cross_type_threshold_multiplier))
             df.loc[group.index[mask], "Cross-Type Exception Flag"] = "CPT+H Cost Above Typical CMR"
 
     valid = df[df["Outlier"] == False].copy()
@@ -1418,16 +1625,22 @@ def run_analysis(rebuild_file, rate_file):
     adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
     rebuild_reference = pd.DataFrame([{"CCR TYPE": key, "Description": value} for key, value in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
-    metadata = pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Expanded 2016-2026" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique()]})
+    metadata = pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers", "Scenario Name", "User Role View", "Strict Mode", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "CPT+H Threshold Multiplier", "Minimum CMR Benchmark Rows", "Dealer Rate Coverage Warning Threshold %", "Dealer Rate Coverage Strict Threshold %", "Data Quality Strict Minimum Score", "Large-Run Row Warning Threshold"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Expanded 2016-2026" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique(), scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, cross_type_threshold_multiplier, min_cmr_rows_for_benchmark, dealer_rate_coverage_warning_threshold, dealer_rate_coverage_strict_threshold, data_quality_strict_min_score, max_rows_warning_threshold]})
     data_quality_summary = pd.DataFrame({"Metric": ["Missing Service Date", "Missing Dealer Code", "Missing Parts DN", "Missing Labor Hours", "SMU 0 or 1", "Unknown/Other Regions", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate", "Rows Using Built-in Default Fallback Rate", "Dealer Rate Exception Rows"], "Value": [missing_service_date_count, missing_dealer_code_count, missing_parts_count, missing_labor_hours_count, int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), unknown_region_count, fallback_fx_count, int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), int((df["Rate Source"] == "Built-in Default Fallback Rate").sum()), int((df["Dealer Rate Exception Flag"] != "").sum())]})
     dealer_rate_coverage_summary = build_dealer_rate_coverage_summary(df)
     data_quality_score_summary = build_data_quality_score_summary(df, outlier_count=int(df["Outlier"].sum()), insufficient_count=int(df["Insufficient Sample Group"].sum()))
     run_readiness_summary = build_run_readiness_summary(df, dealer_rate_coverage_summary, data_quality_score_summary)
+    parameter_summary = build_parameter_summary_table()
+    known_limitations = build_known_limitations_table()
+    data_dictionary = build_data_dictionary_table()
+    role_policy = build_role_policy_table()
+    performance_safeguards = build_performance_safeguard_summary(rows_uploaded, len(df))
+    evaluate_strict_mode(run_readiness_summary, dealer_rate_coverage_summary, data_quality_score_summary, len(df))
     show_adjusted_cpth = has_both_cmr_cpth(valid)
     machine_benchmark_ranking = build_machine_benchmark_ranking(valid, df, cost_col)
     executive_narrative = build_executive_narrative(valid, summary, cost_col, int(df["Outlier"].sum()), int((valid["Cross-Type Exception Flag"] != "").sum()), dealer_rate_coverage_summary, data_quality_score_summary, show_adjusted_cpth)
 
-    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative}
+    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards}
 
 # =====================================================
 # RENDER RESULTS
@@ -1472,15 +1685,24 @@ if st.session_state.run_clicked and rebuild_file:
     show_adjusted_cpth = analysis.get("show_adjusted_cpth", False)
     machine_benchmark_ranking = analysis.get("machine_benchmark_ranking", pd.DataFrame())
     executive_narrative = analysis.get("executive_narrative", [])
+    parameter_summary = analysis.get("parameter_summary", pd.DataFrame())
+    known_limitations = analysis.get("known_limitations", pd.DataFrame())
+    data_dictionary = analysis.get("data_dictionary", pd.DataFrame())
+    role_policy = analysis.get("role_policy", pd.DataFrame())
+    performance_safeguards = analysis.get("performance_safeguards", pd.DataFrame())
 
-    tabs = st.tabs(["Executive Dashboard", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Executive Insights", "How to Use", "Methodology", "Reference"])
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = tabs
+    tabs = st.tabs(["Executive Dashboard", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Executive Insights", "How to Use", "Methodology", "Governance & Dictionary", "Reference"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = tabs
 
     with tab1:
         st.subheader("Run Summary")
         display_table(metadata)
         st.write("### Run Readiness Check")
         display_table(run_readiness_summary)
+        st.write("### Saved Parameter Summary")
+        display_table(parameter_summary)
+        st.write("### Performance Safeguards")
+        display_table(performance_safeguards)
         st.write("### Dealer Rate Coverage Score")
         display_table(dealer_rate_coverage_summary)
         st.write("### Data Quality Score")
@@ -1623,6 +1845,8 @@ if st.session_state.run_clicked and rebuild_file:
         st.dataframe(data_quality_summary, use_container_width=True)
         st.write("### Data Quality Score")
         display_table(data_quality_score_summary)
+        st.write("### Performance Safeguards")
+        display_table(performance_safeguards)
         st.write("### Dealer Rate Coverage Score")
         display_table(dealer_rate_coverage_summary)
         st.write("### Dealer Rate Upload Validation")
@@ -1692,8 +1916,10 @@ if st.session_state.run_clicked and rebuild_file:
         5. Review the Executive Dashboard, dealer rate coverage score, and data quality score.
         6. Use Machine Detail for selected-machine review.
         7. Review Exceptions & Data Quality before sharing results.
-        8. Choose the least-detailed export mode and provide an export reason.
-        9. Interpret Excel highlights: red = cost outlier, orange = cross-type exception, yellow = insufficient sample group.
+        8. If needed, manually change advanced thresholds; defaults preserve the standard methodology.
+        9. Use Strict Mode only for formal review where the configured thresholds should stop weak runs.
+        10. Choose the least-detailed export mode and provide an export reason.
+        11. Interpret Excel highlights: red = cost outlier, orange = cross-type exception, yellow = insufficient sample group.
         """)
 
     with tab8:
@@ -1701,9 +1927,22 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.0 addition:** Adds conditional adjusted CPT+H display, run readiness checks, dealer rate coverage score, data quality score, How-to guidance, export modes/reason, executive narrative, machine benchmark ranking, methodology version tracking, and workbook cover sheets.""")
+**V16.1 addition:** Adds known limitations, data dictionary, Strict Mode, manually configurable thresholds with methodology-preserving defaults, scenario naming, saved parameter summary, advisory role-based export design, Confidential Yellow watermarks, and performance safeguards.""")
 
     with tab9:
+        st.subheader("Governance & Data Dictionary")
+        st.write("### Known Limitations")
+        display_table(known_limitations)
+        st.write("### Data Dictionary")
+        display_table(data_dictionary)
+        st.write("### Role-Based Export Design")
+        display_table(role_policy)
+        st.write("### Saved Parameter Summary")
+        display_table(parameter_summary)
+        st.write("### Performance Safeguards")
+        display_table(performance_safeguards)
+
+    with tab10:
         st.subheader("Configured Rebuild Types and Regions")
         st.write("### Certified Rebuild Types")
         st.dataframe(rebuild_reference, use_container_width=True)
@@ -1717,7 +1956,7 @@ if st.session_state.run_clicked and rebuild_file:
     output = BytesIO()
     export_metadata = pd.concat([
         metadata.copy(),
-        pd.DataFrame({"Field": ["Export Mode", "Export Reason", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version"], "Value": [export_mode, export_reason_final, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION]}),
+        pd.DataFrame({"Field": ["Export Mode", "Export Reason", "Scenario Name", "User Role View", "Strict Mode", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version"], "Value": [export_mode, export_reason_final, scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION]}),
     ], ignore_index=True)
     cover_sheet = build_cover_sheet(export_metadata, run_readiness_summary, data_quality_score_summary, dealer_rate_coverage_summary, export_mode, export_reason_final)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -1726,6 +1965,8 @@ if st.session_state.run_clicked and rebuild_file:
         run_readiness_summary.to_excel(writer, sheet_name="Run Readiness", index=False)
         dealer_rate_coverage_summary.to_excel(writer, sheet_name="Rate Coverage", index=False)
         data_quality_score_summary.to_excel(writer, sheet_name="Data Quality Score", index=False)
+        parameter_summary.to_excel(writer, sheet_name="Parameters", index=False)
+        performance_safeguards.to_excel(writer, sheet_name="Performance Checks", index=False)
         if export_mode == "Summary Only":
             summary.to_excel(writer, sheet_name="Summary", index=False)
             if show_adjusted_cpth:
@@ -1767,14 +2008,18 @@ if st.session_state.run_clicked and rebuild_file:
             fx_lookup.to_excel(writer, sheet_name="FX Rates", index=False)
             rebuild_reference.to_excel(writer, sheet_name="Rebuild Type Reference", index=False)
             region_reference.to_excel(writer, sheet_name="Region Reference", index=False)
+            known_limitations.to_excel(writer, sheet_name="Known Limitations", index=False)
+            data_dictionary.to_excel(writer, sheet_name="Data Dictionary", index=False)
+            role_policy.to_excel(writer, sheet_name="Role Design", index=False)
             for machine in valid["SALES MODEL"].dropna().unique():
                 valid[valid["SALES MODEL"] == machine].to_excel(writer, sheet_name=safe_sheet_name(machine), index=False)
         apply_excel_brand_formatting(writer.book)
     if render_export_acknowledgement("full_export_ack"):
-        st.download_button("Download Workbook", data=output.getvalue(), file_name=f"Rebuild_Analysis_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
+        safe_scenario = re.sub(r"[^A-Za-z0-9_-]+", "_", scenario_name.strip()) if scenario_name else "Scenario"
+        st.download_button("Download Workbook", data=output.getvalue(), file_name=f"Rebuild_Analysis_{safe_scenario}_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
     else:
         st.info("Confirm export authorization to enable the full workbook download.")
-    st.markdown("""<div class="cat-footer"><strong>Rebuild Analytics Platform</strong> | Caterpillar: Confidential Yellow | Internal analytics tool | Cost, inflation, dealer, region, outlier, and cross-type exception reporting</div>""", unsafe_allow_html=True)
+    st.markdown("""<div class="cat-footer"><strong>Rebuild Analytics Platform</strong> | Caterpillar: Confidential Yellow | Internal analytics tool | Cost, inflation, dealer, region, outlier, cross-type exception, governance, and performance-safeguard reporting</div>""", unsafe_allow_html=True)
 else:
     st.info("Upload file and run analysis")
 
