@@ -14,14 +14,14 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.2.2"
+APP_VERSION = "V16.2.3"
 APP_LAST_UPDATED = "2026-06-30"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
-SECURITY_CONTROL_VERSION = "Confidential Yellow Phase 1"
-EXPORT_FORMAT_VERSION = "V16.2.2 Power BI Clean Header Export"
-CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
+SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
+EXPORT_FORMAT_VERSION = "V16.2.3 No Removed Label Export"
+CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
 
@@ -117,7 +117,6 @@ def render_header():
 
 inject_cat_theme()
 render_header()
-st.warning(f"{CONFIDENTIALITY_LABEL} — Authorized use only. Do not upload, analyze, or export data unless approved to handle this information.")
 
 # =====================================================
 # CONFIG
@@ -327,7 +326,7 @@ def reset_app_state():
 def render_export_acknowledgement(key="export_ack"):
     """Return True only when user acknowledges export authorization."""
     return st.checkbox(
-        f"I understand this export is {CONFIDENTIALITY_LABEL} and I am authorized to download it.",
+        "I am authorized to download this export.",
         key=key,
     )
 
@@ -516,8 +515,8 @@ def build_cover_sheet(metadata, readiness, dq_score, rate_cov, export_mode="Full
             return default
     safe_scenario = scenario_name_value if scenario_name_value else "Not provided"
     return pd.DataFrame({
-        "Field": ["Confidentiality Label", "App Version", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "Export Timestamp", "Export Mode", "Export Reason", "Scenario Name", "User Role View", "Strict Mode", "Overall Run Readiness", "Data Quality Score", "Data Quality Label", "Dealer Rate Coverage Score", "Dealer-Year Match Rate %", "Highlight Legend"],
-        "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), export_mode, export_reason, safe_scenario, user_role_view_value, "Yes" if strict_mode_value else "No", look(readiness, "Overall Run Readiness", "Unknown"), look(dq_score, "Data Quality Score", "Unknown"), look(dq_score, "Data Quality Label", "Unknown"), look(rate_cov, "Dealer Rate Coverage Score", "Unknown"), look(rate_cov, "Dealer-Year Match Rate %", "Unknown"), "Red = cost outlier; orange = cross-type exception; yellow = insufficient sample group."]
+        "Field": ["App Version", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "Export Timestamp", "Export Mode", "Export Reason", "Scenario Name", "User Role View", "Strict Mode", "Overall Run Readiness", "Data Quality Score", "Data Quality Label", "Dealer Rate Coverage Score", "Dealer-Year Match Rate %", "Highlight Legend"],
+        "Value": [APP_VERSION, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), export_mode, export_reason, safe_scenario, user_role_view_value, "Yes" if strict_mode_value else "No", look(readiness, "Overall Run Readiness", "Unknown"), look(dq_score, "Data Quality Score", "Unknown"), look(dq_score, "Data Quality Label", "Unknown"), look(rate_cov, "Dealer Rate Coverage Score", "Unknown"), look(rate_cov, "Dealer-Year Match Rate %", "Unknown"), "Red = cost outlier; orange = cross-type exception; yellow = insufficient sample group."]
     })
 
 
@@ -547,7 +546,7 @@ def build_known_limitations_table():
             "The expanded built-in dealer-rate workbook must be deployed next to app.py; otherwise emergency generic rates are used.",
             "Cost outliers are detected by Machine + CCR TYPE using log(cost) IQR logic only.",
             "CPT+H cross-type review requires at least 3 valid CMR rows for the same machine.",
-            "Confidential Yellow labeling and acknowledgements support governance but do not replace enterprise authentication/authorization.",
+            " labeling and acknowledgements support governance but do not replace enterprise authentication/authorization.",
         ],
     })
 
@@ -672,29 +671,8 @@ def build_performance_safeguard_summary(source_rows, processed_rows):
 
 
 def apply_confidential_watermark(workbook, scenario_name_value=None):
-    """Add a visible Confidential Yellow label to the top of each worksheet.
-
-    Scope-safe and idempotent: this function can be called before Streamlit UI
-    variables exist, and repeated calls will not keep inserting new rows.
-    """
-    watermark_fill = PatternFill(start_color="FFC500", end_color="FFC500", fill_type="solid")
-    watermark_font = Font(color="000000", bold=True)
-    scenario_label = scenario_name_value if scenario_name_value else "Unnamed Scenario"
-    label = f"{CONFIDENTIALITY_LABEL} | {APP_VERSION} | {scenario_label}"
-    for ws in workbook.worksheets:
-        first_cell_value = str(ws.cell(row=1, column=1).value or "")
-        if first_cell_value.startswith(CONFIDENTIALITY_LABEL):
-            ws.cell(row=1, column=1).value = label
-        else:
-            ws.insert_rows(1)
-            ws.cell(row=1, column=1).value = label
-        ws.cell(row=1, column=1).fill = watermark_fill
-        ws.cell(row=1, column=1).font = watermark_font
-        try:
-            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(ws.max_column, 1))
-        except Exception:
-            pass
-        ws.freeze_panes = "A3"
+    """No-op retained for compatibility. V16.2.3 removes confidentiality label rows from all exports."""
+    return None
 
 
 def evaluate_strict_mode(run_readiness_summary, dealer_rate_coverage_summary, data_quality_score_summary, processed_rows):
@@ -1205,12 +1183,12 @@ def build_machine_export(selected_machine, analysis):
 
     machine_summary = pd.DataFrame({
         "Metric": [
-            "Confidentiality Label", "Selected Machine", "Total Rows", "Valid Rows", "Standard Avg Cost", "Adjusted Avg Cost",
+            "Selected Machine", "Total Rows", "Valid Rows", "Standard Avg Cost", "Adjusted Avg Cost",
             "Adjusted CPT+H Avg", "Average SMU", "Cost Outliers", "Cross-Type Flags",
             "SMU Data Quality Flags", "Fallback Labor Rate Rows", "Fallback FX Rows"
         ],
         "Value": [
-            CONFIDENTIALITY_LABEL, selected_machine, len(machine_all), len(machine_valid), standard_avg, adjusted_avg, adjusted_cpth_avg,
+            selected_machine, len(machine_all), len(machine_valid), standard_avg, adjusted_avg, adjusted_cpth_avg,
             machine_valid["SMU AT REBUILD"].mean() if not machine_valid.empty else np.nan,
             int(machine_all["Outlier"].sum()) if "Outlier" in machine_all.columns else 0,
             int((machine_valid["Cross-Type Exception Flag"] != "").sum()) if "Cross-Type Exception Flag" in machine_valid.columns else 0,
@@ -1220,6 +1198,11 @@ def build_machine_export(selected_machine, analysis):
         ]
     })
 
+    
+    if "Metric" in machine_summary.columns:
+        machine_summary = machine_summary[~machine_summary["Metric"].astype(str).str.contains("Confidential|Removed Label", case=False, na=False)].copy()
+    if "Value" in machine_summary.columns:
+        machine_summary = machine_summary[~machine_summary["Value"].astype(str).str.contains("Confidential|Yellow", case=False, na=False)].copy()
     rebuild_summary = machine_valid.groupby("CCR TYPE").agg(
         Avg_Cost=(cost_col, "mean"),
         Avg_SMU=("SMU AT REBUILD", "mean"),
@@ -1526,15 +1509,15 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         ],
         "Value": [
             run_id, scenario_label, export_mode_value, export_reason_value, "V16.2.2 Power BI Dataset Export",
-            "Clean flat tables; no watermark rows, merged cells, decorative headers, or Confidential Yellow marker rows. Use Run ID to relate scenario-specific tables.",
+            "Clean flat tables; no watermark rows, merged cells, decorative headers, or  marker rows. Use Run ID to relate scenario-specific tables.",
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ]
     })
     run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
     if "Field" in run_metadata.columns:
-        run_metadata = run_metadata[~run_metadata["Field"].astype(str).str.contains("Confidentiality", case=False, na=False)].copy()
+        run_metadata = run_metadata[~run_metadata["Field"].astype(str).str.contains("Confidential|Removed Label", case=False, na=False)].copy()
     if "Value" in run_metadata.columns:
-        run_metadata = run_metadata[~run_metadata["Value"].astype(str).str.contains("Confidential Yellow", case=False, na=False)].copy()
+        run_metadata = run_metadata[~run_metadata["Value"].astype(str).str.contains("", case=False, na=False)].copy()
 
     relationship_guide = pd.DataFrame({
         "From Table": [
@@ -1604,12 +1587,12 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
 
 
 def _strip_powerbi_confidential_marker_rows(df):
-    """Remove any accidental Confidential Yellow marker rows before writing Power BI tables."""
+    """Remove any accidental label marker rows before writing Power BI tables."""
     out = _clean_powerbi_columns(df)
     if out.empty:
         return out
     first_col = out.columns[0]
-    marker_mask = out[first_col].astype(str).str.contains("Confidential Yellow", case=False, na=False)
+    marker_mask = out[first_col].astype(str).str.contains("Confidential|Yellow|Removed Label", case=False, na=False)
     return out.loc[~marker_mask].copy()
 
 
@@ -1943,7 +1926,12 @@ def run_analysis(rebuild_file, rate_file):
     adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
     rebuild_reference = pd.DataFrame([{"CCR TYPE": key, "Description": value} for key, value in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
-    metadata = pd.DataFrame({"Field": ["Confidentiality Label", "App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers", "Scenario Name", "User Role View", "Strict Mode", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "CPT+H Threshold Multiplier", "Minimum CMR Benchmark Rows", "Dealer Rate Coverage Warning Threshold %", "Dealer Rate Coverage Strict Threshold %", "Data Quality Strict Minimum Score", "Large-Run Row Warning Threshold"], "Value": [CONFIDENTIALITY_LABEL, APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Expanded 2016-2026" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique(), scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, cross_type_threshold_multiplier, min_cmr_rows_for_benchmark, dealer_rate_coverage_warning_threshold, dealer_rate_coverage_strict_threshold, data_quality_strict_min_score, max_rows_warning_threshold]})
+    metadata = pd.DataFrame({"Field": ["App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers", "Scenario Name", "User Role View", "Strict Mode", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "CPT+H Threshold Multiplier", "Minimum CMR Benchmark Rows", "Dealer Rate Coverage Warning Threshold %", "Dealer Rate Coverage Strict Threshold %", "Data Quality Strict Minimum Score", "Large-Run Row Warning Threshold"], "Value": [APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Expanded 2016-2026" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique(), scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, cross_type_threshold_multiplier, min_cmr_rows_for_benchmark, dealer_rate_coverage_warning_threshold, dealer_rate_coverage_strict_threshold, data_quality_strict_min_score, max_rows_warning_threshold]})
+    
+    if "Field" in metadata.columns:
+        metadata = metadata[~metadata["Field"].astype(str).str.contains("Confidential|Removed Label", case=False, na=False)].copy()
+    if "Value" in metadata.columns:
+        metadata = metadata[~metadata["Value"].astype(str).str.contains("Confidential|Yellow", case=False, na=False)].copy()
     data_quality_summary = pd.DataFrame({"Metric": ["Missing Service Date", "Missing Dealer Code", "Missing Parts DN", "Missing Labor Hours", "SMU 0 or 1", "Unknown/Other Regions", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate", "Rows Using Built-in Default Fallback Rate", "Dealer Rate Exception Rows"], "Value": [missing_service_date_count, missing_dealer_code_count, missing_parts_count, missing_labor_hours_count, int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), unknown_region_count, fallback_fx_count, int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), int((df["Rate Source"] == "Built-in Default Fallback Rate").sum()), int((df["Dealer Rate Exception Flag"] != "").sum())]})
     dealer_rate_coverage_summary = build_dealer_rate_coverage_summary(df)
     data_quality_score_summary = build_data_quality_score_summary(df, outlier_count=int(df["Outlier"].sum()), insufficient_count=int(df["Insufficient Sample Group"].sum()))
@@ -2245,7 +2233,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.2.2 fix:** Power BI Dataset Export now completely suppresses Confidential Yellow watermark rows and writes column headers directly on row 1 for every Power BI sheet. Normal Excel review exports still keep Confidential Yellow workbook markings.""")
+**V16.2.3 fix:** Removes the confidentiality label from the app UI, export acknowledgements, workbook watermark rows, workbook metadata, machine summaries, and Power BI dataset exports. Power BI Dataset Export keeps column headers directly on row 1 for every sheet.""")
 
     with tab9:
         st.subheader("Governance & Data Dictionary")
@@ -2356,7 +2344,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.download_button(download_label, data=output.getvalue(), file_name=f"{export_prefix}_{safe_scenario}_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
     else:
         st.info("Confirm export authorization to enable the full workbook download.")
-    st.markdown("""<div class="cat-footer"><strong>Rebuild Analytics Platform</strong> | Caterpillar: Confidential Yellow | Internal analytics tool | Cost, inflation, dealer, region, outlier, cross-type exception, governance, performance-safeguard, and Power BI dataset reporting</div>""", unsafe_allow_html=True)
+    st.markdown("""<div class="cat-footer"><strong>Rebuild Analytics Platform</strong> | Internal analytics tool | Cost, inflation, dealer, region, outlier, cross-type exception, governance, performance-safeguard, and Power BI dataset reporting</div>""", unsafe_allow_html=True)
 else:
     st.info("Upload file and run analysis")
 
