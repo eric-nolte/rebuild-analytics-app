@@ -9,21 +9,27 @@ import base64
 import json
 import re
 import urllib.request
+import zipfile
 
 import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.2.3"
-APP_LAST_UPDATED = "2026-06-30"
+APP_VERSION = "V16.4"
+APP_LAST_UPDATED = "2026-07-07"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V16.2.3 No Removed Label Export"
+EXPORT_FORMAT_VERSION = "V16.4 CCR Regional Cost & Machine Insights"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
+DEFAULT_POWERBI_TABLES_STANDARD = ["Fact_RebuildRows", "Dim_Machine", "Dim_Dealer", "Dim_RebuildType", "Dim_Region", "Dim_Date", "Fact_GlobalCCRTypeAvg", "Fact_RegionCCRTypeAvg", "Fact_MachineCCRTypeAvg", "Fact_MachineInsights", "Fact_MachineSummary", "Fact_DealerPerf", "Fact_RegionPerf", "Run_Metadata", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "Scenario_Comparison", "Filter_Summary"]
+DEFAULT_POWERBI_TABLES_DETAILED = DEFAULT_POWERBI_TABLES_STANDARD + ["Fact_ExceptionRows", "Fact_OutlierRows", "Fact_CrossTypeFlags", "Fact_RateCoverage", "Fact_DataQuality", "PowerBI_Readiness"]
+DEFAULT_POWERBI_TABLES_FULL_AUDIT = DEFAULT_POWERBI_TABLES_DETAILED + ["Fact_ValidRows", "DataQualitySummary", "Parameters", "Data_Dictionary", "Known_Limitations", "Machine_Grouping"]
+POWERBI_TABLE_OPTIONS = list(dict.fromkeys(DEFAULT_POWERBI_TABLES_FULL_AUDIT))
+POWERBI_PRESET_MAP = {"Standard": DEFAULT_POWERBI_TABLES_STANDARD, "Detailed": DEFAULT_POWERBI_TABLES_DETAILED, "Full Audit": DEFAULT_POWERBI_TABLES_FULL_AUDIT}
 
 st.set_page_config(layout="wide", page_title="Rebuild Analytics Platform")
 
@@ -589,6 +595,424 @@ def build_data_dictionary_table():
         ],
     })
 
+
+
+# =====================================================
+# V16.3 POWER BI READINESS / MACHINE GROUPING HELPERS
+# =====================================================
+def infer_machine_grouping_value(model):
+    """Infer a simple built-in machine group from SALES MODEL."""
+    text = str(model).strip().upper() if pd.notna(model) else "UNKNOWN"
+    if not text or text == "NAN":
+        return {"Machine Group": "UNKNOWN", "Machine Family": "UNKNOWN", "Machine Category": "Auto", "Machine Group Source": "Built-in", "Machine Group Notes": "Missing model"}
+    # Common examples: 777F -> 777 Series, D11T -> D11 Series, 988K -> 988 Series.
+    d_match = re.match(r"^(D\d+)", text)
+    if d_match:
+        family = d_match.group(1)
+    else:
+        n_match = re.search(r"(\d{2,4})", text)
+        family = n_match.group(1) if n_match else text
+    return {"Machine Group": f"{family} Series", "Machine Family": family, "Machine Category": "Auto", "Machine Group Source": "Built-in", "Machine Group Notes": "Auto-derived from SALES MODEL"}
+
+
+def normalize_machine_grouping_columns(df):
+    temp = df.copy()
+    temp.columns = [str(c).strip() for c in temp.columns]
+    rename = {}
+    for col in temp.columns:
+        cu = str(col).strip().upper().replace("_", " ")
+        if cu in ["SALES MODEL", "MODEL", "MACHINE", "MACHINE MODEL"]:
+            rename[col] = "SALES MODEL"
+        elif cu in ["MACHINE GROUP", "GROUP"]:
+            rename[col] = "Machine Group"
+        elif cu in ["MACHINE FAMILY", "FAMILY"]:
+            rename[col] = "Machine Family"
+        elif cu in ["MACHINE CATEGORY", "CATEGORY"]:
+            rename[col] = "Machine Category"
+        elif cu in ["NOTES", "NOTE", "COMMENTS", "COMMENT"]:
+            rename[col] = "Notes"
+    return temp.rename(columns=rename)
+
+
+def parse_machine_grouping_file(group_file):
+    if group_file is None:
+        return pd.DataFrame(columns=["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes"])
+    group_file.seek(0)
+    sheets = pd.read_excel(group_file, sheet_name=None)
+    frames = []
+    for sname, sheet in sheets.items():
+        temp = normalize_machine_grouping_columns(sheet)
+        if {"SALES MODEL", "Machine Group"}.issubset(set(temp.columns)):
+            if "Machine Family" not in temp.columns:
+                temp["Machine Family"] = temp["Machine Group"]
+            if "Machine Category" not in temp.columns:
+                temp["Machine Category"] = "Custom"
+            if "Notes" not in temp.columns:
+                temp["Notes"] = ""
+            temp = temp[["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes"]].copy()
+            temp["Machine Group Source"] = f"Custom Upload: {sname}"
+            frames.append(temp)
+    if not frames:
+        return pd.DataFrame(columns=["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes", "Machine Group Source"])
+    out = pd.concat(frames, ignore_index=True)
+    out["SALES MODEL"] = out["SALES MODEL"].astype(str).str.strip().str.upper()
+    out = out[out["SALES MODEL"] != ""].drop_duplicates("SALES MODEL", keep="last")
+    return out
+
+
+def create_machine_grouping_template():
+    template = pd.DataFrame({
+        "SALES MODEL": ["777F", "793F", "D11T", "988K"],
+        "Machine Group": ["777 Series", "793 Series", "D11 Series", "988 Series"],
+        "Machine Family": ["777", "793", "D11", "988"],
+        "Machine Category": ["Truck", "Truck", "Track-Type Tractor", "Wheel Loader"],
+        "Notes": ["Example only", "Example only", "Example only", "Example only"],
+    })
+    instructions = pd.DataFrame({
+        "Field": ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes"],
+        "Requirement": ["Required", "Required", "Optional", "Optional", "Optional"],
+        "Description": [
+            "Machine model exactly as it appears in the rebuild file.",
+            "Custom group used for filtering and Power BI hierarchy.",
+            "Optional higher-level family label.",
+            "Optional category such as Truck, Dozer, Loader, Motor Grader, etc.",
+            "Optional notes for handoff/auditability.",
+        ]
+    })
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        template.to_excel(writer, sheet_name="Machine Grouping", index=False)
+        instructions.to_excel(writer, sheet_name="Instructions", index=False)
+        apply_excel_brand_formatting(writer.book)
+    output.seek(0)
+    return output.getvalue()
+
+
+def apply_machine_grouping(df, group_file=None):
+    """Apply built-in machine grouping, overridden by an optional custom grouping file."""
+    out = df.copy()
+    models = out["SALES MODEL"].dropna().astype(str).str.strip().str.upper().unique() if "SALES MODEL" in out.columns else []
+    builtin = []
+    for model in models:
+        row = {"SALES MODEL": model}
+        row.update(infer_machine_grouping_value(model))
+        builtin.append(row)
+    grouping = pd.DataFrame(builtin)
+    custom = parse_machine_grouping_file(group_file)
+    if not custom.empty:
+        custom = custom.rename(columns={"Notes": "Machine Group Notes"})
+        for col in ["Machine Family", "Machine Category", "Machine Group Source", "Machine Group Notes"]:
+            if col not in custom.columns:
+                custom[col] = "Custom" if col != "Machine Group Notes" else ""
+        custom["Machine Group Source"] = custom.get("Machine Group Source", "Custom Upload")
+        grouping = grouping.set_index("SALES MODEL")
+        custom = custom.set_index("SALES MODEL")
+        grouping.update(custom[[c for c in custom.columns if c in grouping.columns]])
+        missing = custom.index.difference(grouping.index)
+        if len(missing) > 0:
+            grouping = pd.concat([grouping, custom.loc[missing]], axis=0)
+        grouping = grouping.reset_index()
+    out["SALES MODEL"] = out["SALES MODEL"].astype(str).str.strip().str.upper()
+    out = out.merge(grouping, on="SALES MODEL", how="left")
+    for col, default in [("Machine Group", "UNKNOWN"), ("Machine Family", "UNKNOWN"), ("Machine Category", "Auto"), ("Machine Group Source", "Built-in"), ("Machine Group Notes", "")]:
+        if col not in out.columns:
+            out[col] = default
+        out[col] = out[col].fillna(default)
+    return out, grouping
+
+
+def build_filter_summary_table():
+    return pd.DataFrame({
+        "Filter": ["Scenario Name", "Machines", "Years", "Base Year", "Rebuild Types", "Regions", "Inflation Applied", "Dealer Rate Source", "Fallback Behavior", "Strict Mode", "Export Mode"],
+        "Value": [
+            scenario_name if scenario_name else "Not provided",
+            machine_input if machine_input else "All",
+            f"{start_year}–{end_year}",
+            base_year,
+            ", ".join(rebuild_filter),
+            ", ".join(region_filter),
+            "Yes" if apply_inflation else "No",
+            "Built-in Expanded Dealer Rates" if use_default else "Uploaded Custom Dealer Rates",
+            "Built-in default behavior" if use_default else rate_fallback_behavior,
+            "Yes" if strict_mode else "No",
+            export_mode,
+        ]
+    })
+
+
+def build_powerbi_export_preview(tables, selected_tables=None):
+    selected = selected_tables or list(tables.keys())
+    rows = []
+    for name in selected:
+        table = tables.get(name, pd.DataFrame())
+        if table is None or not isinstance(table, pd.DataFrame):
+            table = pd.DataFrame()
+        cols = [str(c) for c in table.columns]
+        blank_cols = sum(1 for c in cols if c.strip() == "" or c.startswith("Unnamed"))
+        dup_cols = len(cols) - len(set(cols))
+        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout"]
+        marker_rows = 0
+        if not table.empty:
+            first_col = table.columns[0]
+            marker_rows = int(table[first_col].astype(str).str.contains("Confidential|Yellow|Removed Label", case=False, na=False).sum())
+        status = "Ready"
+        notes = []
+        if table.empty:
+            status = "Needs Review"
+            notes.append("Empty table")
+        if blank_cols:
+            status = "Not Ready"
+            notes.append(f"{blank_cols} blank/unnamed column(s)")
+        if dup_cols:
+            status = "Not Ready"
+            notes.append(f"{dup_cols} duplicate column name(s)")
+        if marker_rows:
+            status = "Not Ready"
+            notes.append(f"{marker_rows} marker row(s)")
+        if not run_id:
+            status = "Needs Review"
+            notes.append("Run ID not present")
+        rows.append({"Table": name, "Included": name in selected, "Rows": len(table), "Columns": len(cols), "Blank Headers": blank_cols, "Duplicate Headers": dup_cols, "Run ID Present": run_id, "Marker Rows": marker_rows, "Status": status, "Notes": "; ".join(notes) if notes else "OK"})
+    return pd.DataFrame(rows)
+
+
+def build_powerbi_readiness_score(preview_df):
+    if preview_df is None or preview_df.empty:
+        return pd.DataFrame({"Metric": ["Power BI Readiness"], "Value": ["Not Ready"]})
+    not_ready = int((preview_df["Status"] == "Not Ready").sum())
+    needs_review = int((preview_df["Status"] == "Needs Review").sum())
+    total = max(len(preview_df), 1)
+    score = max(0, round(100 - not_ready * 20 - needs_review * 7, 1))
+    label = "Ready" if not_ready == 0 and needs_review == 0 else ("Needs Review" if not_ready == 0 else "Not Ready")
+    return pd.DataFrame({"Metric": ["Power BI Readiness", "Power BI Readiness Score", "Tables Checked", "Not Ready Tables", "Needs Review Tables"], "Value": [label, score, total, not_ready, needs_review]})
+
+
+def build_scenario_comparison_table(analysis, run_id=None, scenario_name_value=None):
+    df = analysis["df"]
+    valid = analysis["valid"]
+    cost_col = analysis["cost_col"]
+    rate_cov = analysis.get("dealer_rate_coverage_summary", pd.DataFrame())
+    dq_score = analysis.get("data_quality_score_summary", pd.DataFrame())
+    def lookup(table, metric, default=np.nan):
+        try:
+            return table.loc[table.iloc[:, 0] == metric, table.columns[1]].iloc[0]
+        except Exception:
+            return default
+    total = len(df)
+    outliers = int(df["Outlier"].sum()) if "Outlier" in df.columns else 0
+    return pd.DataFrame({
+        "Run ID": [run_id if run_id else datetime.now().strftime("RUN_%Y%m%d_%H%M%S")],
+        "Scenario Name": [scenario_name_value if scenario_name_value else (scenario_name if scenario_name else "Not provided")],
+        "Run Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        "App Version": [APP_VERSION],
+        "Avg Cost": [valid[cost_col].mean() if not valid.empty else np.nan],
+        "Valid Rows": [len(valid)],
+        "Total Rows": [total],
+        "Outlier Rows": [outliers],
+        "Outlier Rate %": [_percent_from_counts(outliers, total)],
+        "Cross-Type Flags": [int((valid["Cross-Type Exception Flag"].astype(str).str.strip() != "").sum()) if "Cross-Type Exception Flag" in valid.columns else 0],
+        "Dealer Rate Coverage %": [lookup(rate_cov, "Dealer-Year Match Rate %")],
+        "Data Quality Score": [lookup(dq_score, "Data Quality Score")],
+        "Start Year": [start_year],
+        "End Year": [end_year],
+        "Base Year": [base_year],
+        "Dealer Rate Source": ["Built-in Expanded Dealer Rates" if use_default else "Uploaded Custom Dealer Rates"],
+        "Inflation Applied": ["Yes" if apply_inflation else "No"],
+    })
+
+
+def build_powerbi_instructions_table():
+    return pd.DataFrame({
+        "Step": [1, 2, 3, 4, 5, 6, 7],
+        "Instruction": [
+            "Open Power BI Desktop and select Get Data > Excel Workbook.",
+            "Choose the Power BI Dataset Export workbook from this app.",
+            "Select the Fact and Dim tables you included in the export.",
+            "Use Relationship_Guide to create suggested relationships.",
+            "Use DAX_Starter for optional starter measures.",
+            "Use Scenario_Comparison when appending multiple run exports.",
+            "Use Machine Group fields for grouped slicers and hierarchy visuals.",
+        ],
+        "Notes": [
+            "Use Power BI Dataset Export, not formatted review workbooks.",
+            "Each sheet is designed with headers in row 1.",
+            "Fact_RebuildRows is the primary table.",
+            "Most relationships are many-to-one from Fact tables to Dim tables.",
+            "Review measure names and cost column before publishing.",
+            "Run ID can support comparing multiple scenarios later.",
+            "Custom uploaded grouping overrides built-in grouping where provided.",
+        ]
+    })
+
+
+def build_powerbi_report_layout_table():
+    return pd.DataFrame({
+        "Page": ["Executive Overview", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Scenario Comparison"],
+        "Visual": ["Cards + bar charts", "Slicers + scatter + bar", "Ranked bar/matrix", "Bar/matrix", "Tables + count by type", "Trend/table"],
+        "Primary Table": ["Fact_RebuildRows", "Fact_MachineCCRTypeAvg", "Fact_DealerPerf", "Fact_RegionCCRTypeAvg", "Fact_ExceptionRows", "Scenario_Comparison"],
+        "Suggested Fields": ["Avg Cost, Valid Rows, Outliers, Machine Group", "SALES MODEL, Machine Group, SMU, Cost, CCR TYPE", "Dealer Code, DEALER, Avg_Cost, Performance Label", "Region, Avg_Cost, Count", "Exception Type, Exception Detail, Cost", "Run ID, Scenario Name, Avg Cost, Outlier Rate %"],
+        "Purpose": ["High-level performance summary", "Analyze a selected machine/model", "Compare dealer cost performance", "Compare regional cost performance", "Review rows requiring attention", "Compare multiple exported scenarios"],
+    })
+
+
+def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col):
+    """Global CCR type summary with Standard and Adjusted CPT+H in the same table."""
+    rows = []
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame()
+    standard = valid_df.groupby("CCR TYPE", dropna=False).agg(
+        Avg_Cost=(cost_col, "mean"),
+        Avg_SMU=("SMU AT REBUILD", "mean"),
+        Count=(cost_col, "count"),
+    ).reset_index()
+    standard["Cost View"] = "Standard"
+    standard["Cross-Type Flags Removed"] = 0
+    rows.append(standard)
+    if adjusted_valid_df is not None and not adjusted_valid_df.empty and "CPT+H" in set(valid_df["CCR TYPE"].astype(str)):
+        adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
+        if not adj_cpth.empty:
+            adj = adj_cpth.groupby("CCR TYPE", dropna=False).agg(
+                Avg_Cost=(cost_col, "mean"),
+                Avg_SMU=("SMU AT REBUILD", "mean"),
+                Count=(cost_col, "count"),
+            ).reset_index()
+            adj["Cost View"] = "Adjusted"
+            removed = int(((valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")).sum()) if "Cross-Type Exception Flag" in valid_df.columns else 0
+            adj["Cross-Type Flags Removed"] = removed
+            rows.append(adj)
+    out = pd.concat(rows, ignore_index=True, sort=False)
+    out["Sample Confidence"] = out["Count"].apply(sample_confidence)
+    out["Scope"] = "Global"
+    cmr = out[(out["CCR TYPE"] == "CMR") & (out["Cost View"] == "Standard")]
+    cmr_cost = cmr["Avg_Cost"].iloc[0] if not cmr.empty else np.nan
+    out["Vs CMR %"] = ((out["Avg_Cost"] - cmr_cost) / cmr_cost * 100) if pd.notna(cmr_cost) and cmr_cost else np.nan
+    out["Global CCR Avg Cost"] = out["Avg_Cost"]
+    out["Vs Global CCR Avg %"] = 0.0
+    sort_key = {"CMR": 1, "CPT+H": 2, "CPT-O": 3}
+    out["_sort"] = out["CCR TYPE"].map(sort_key).fillna(99)
+    out["_view_sort"] = out["Cost View"].map({"Standard": 1, "Adjusted": 2}).fillna(9)
+    out = out.sort_values(["_sort", "_view_sort", "CCR TYPE"]).drop(columns=["_sort", "_view_sort"])
+    return out[["Scope", "CCR TYPE", "Cost View", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Vs CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]]
+
+
+def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
+    """Region + CCR type summary with Standard and Adjusted CPT+H together."""
+    rows = []
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame()
+    standard = valid_df.groupby(["Region", "CCR TYPE"], dropna=False).agg(
+        Avg_Cost=(cost_col, "mean"),
+        Avg_SMU=("SMU AT REBUILD", "mean"),
+        Count=(cost_col, "count"),
+    ).reset_index()
+    standard["Cost View"] = "Standard"
+    standard["Cross-Type Flags Removed"] = 0
+    rows.append(standard)
+    if adjusted_valid_df is not None and not adjusted_valid_df.empty:
+        adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
+        if not adj_cpth.empty:
+            adj = adj_cpth.groupby(["Region", "CCR TYPE"], dropna=False).agg(
+                Avg_Cost=(cost_col, "mean"),
+                Avg_SMU=("SMU AT REBUILD", "mean"),
+                Count=(cost_col, "count"),
+            ).reset_index()
+            adj["Cost View"] = "Adjusted"
+            if "Cross-Type Exception Flag" in valid_df.columns:
+                removed = valid_df[(valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")].groupby("Region").size().to_dict()
+            else:
+                removed = {}
+            adj["Cross-Type Flags Removed"] = adj["Region"].map(removed).fillna(0).astype(int)
+            rows.append(adj)
+    out = pd.concat(rows, ignore_index=True, sort=False)
+    out["Sample Confidence"] = out["Count"].apply(sample_confidence)
+    cmr_map = out[(out["CCR TYPE"] == "CMR") & (out["Cost View"] == "Standard")].set_index("Region")["Avg_Cost"].to_dict()
+    out["Regional CMR Avg Cost"] = out["Region"].map(cmr_map)
+    out["Vs Regional CMR %"] = np.where(out["Regional CMR Avg Cost"].notna() & (out["Regional CMR Avg Cost"] != 0), (out["Avg_Cost"] - out["Regional CMR Avg Cost"]) / out["Regional CMR Avg Cost"] * 100, np.nan)
+    if global_ccr_summary is None or global_ccr_summary.empty:
+        global_ccr_summary = build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col)
+    lookup = global_ccr_summary.set_index(["CCR TYPE", "Cost View"])["Avg_Cost"].to_dict() if not global_ccr_summary.empty else {}
+    out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
+    out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
+    return out[["Region", "CCR TYPE", "Cost View", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Regional CMR Avg Cost", "Vs Regional CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]].sort_values(["Region", "CCR TYPE", "Cost View"])
+
+
+def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
+    """Machine + CCR type summary with Standard and Adjusted CPT+H together."""
+    rows = []
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame()
+    group_cols = [c for c in ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "CCR TYPE"] if c in valid_df.columns]
+    standard = valid_df.groupby(group_cols, dropna=False).agg(
+        Avg_Cost=(cost_col, "mean"),
+        Avg_SMU=("SMU AT REBUILD", "mean"),
+        Count=(cost_col, "count"),
+    ).reset_index()
+    standard["Cost View"] = "Standard"
+    standard["Cross-Type Flags Removed"] = 0
+    rows.append(standard)
+    if adjusted_valid_df is not None and not adjusted_valid_df.empty:
+        adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
+        if not adj_cpth.empty:
+            adj_group_cols = [c for c in group_cols if c in adj_cpth.columns]
+            adj = adj_cpth.groupby(adj_group_cols, dropna=False).agg(
+                Avg_Cost=(cost_col, "mean"),
+                Avg_SMU=("SMU AT REBUILD", "mean"),
+                Count=(cost_col, "count"),
+            ).reset_index()
+            adj["Cost View"] = "Adjusted"
+            if "Cross-Type Exception Flag" in valid_df.columns:
+                removed = valid_df[(valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")].groupby("SALES MODEL").size().to_dict()
+            else:
+                removed = {}
+            adj["Cross-Type Flags Removed"] = adj["SALES MODEL"].map(removed).fillna(0).astype(int)
+            rows.append(adj)
+    out = pd.concat(rows, ignore_index=True, sort=False)
+    out["Sample Confidence"] = out["Count"].apply(sample_confidence)
+    cmr_map = out[(out["CCR TYPE"] == "CMR") & (out["Cost View"] == "Standard")].set_index("SALES MODEL")["Avg_Cost"].to_dict()
+    out["Machine CMR Avg Cost"] = out["SALES MODEL"].map(cmr_map)
+    out["Vs Machine CMR %"] = np.where(out["Machine CMR Avg Cost"].notna() & (out["Machine CMR Avg Cost"] != 0), (out["Avg_Cost"] - out["Machine CMR Avg Cost"]) / out["Machine CMR Avg Cost"] * 100, np.nan)
+    if global_ccr_summary is None or global_ccr_summary.empty:
+        global_ccr_summary = build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col)
+    lookup = global_ccr_summary.set_index(["CCR TYPE", "Cost View"])["Avg_Cost"].to_dict() if not global_ccr_summary.empty else {}
+    out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
+    out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
+    desired = ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Machine CMR Avg Cost", "Vs Machine CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]
+    return out[[c for c in desired if c in out.columns]].sort_values(["SALES MODEL", "CCR TYPE", "Cost View"])
+
+
+def build_machine_insights_table(valid_df, processed_df, machine_ccr_summary, cost_col):
+    """Generate row-based machine insights for app display and Power BI export."""
+    rows = []
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame(columns=["SALES MODEL", "Machine Group", "Insight Category", "Insight Text", "Metric Name", "Metric Value", "Priority"])
+    for machine, mvalid in valid_df.groupby("SALES MODEL", dropna=False):
+        mall = processed_df[processed_df["SALES MODEL"] == machine].copy() if processed_df is not None and not processed_df.empty else pd.DataFrame()
+        group = mvalid["Machine Group"].dropna().iloc[0] if "Machine Group" in mvalid.columns and not mvalid["Machine Group"].dropna().empty else "UNKNOWN"
+        avg_cost = mvalid[cost_col].mean()
+        rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Average Cost", "Insight Text": f"{machine} average analysis cost is {money(avg_cost)} across {len(mvalid):,} valid row(s).", "Metric Name": "Average Cost", "Metric Value": avg_cost, "Priority": "Info"})
+        ccr_rows = machine_ccr_summary[(machine_ccr_summary["SALES MODEL"] == machine) & (machine_ccr_summary["Cost View"] == "Standard")].copy() if machine_ccr_summary is not None and not machine_ccr_summary.empty else pd.DataFrame()
+        if not ccr_rows.empty:
+            top = ccr_rows.sort_values("Avg_Cost", ascending=False).iloc[0]
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Highest CCR Type", "Insight Text": f"Highest standard CCR type cost for {machine} is {top['CCR TYPE']} at {money(top['Avg_Cost'])}.", "Metric Name": "Highest CCR Avg Cost", "Metric Value": top["Avg_Cost"], "Priority": "Info"})
+        outliers = int(mall["Outlier"].sum()) if not mall.empty and "Outlier" in mall.columns else 0
+        if outliers:
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Outliers", "Insight Text": f"{machine} has {outliers:,} cost outlier row(s) excluded from core averages.", "Metric Name": "Cost Outliers", "Metric Value": outliers, "Priority": "Review"})
+        cross_flags = int((mvalid["Cross-Type Exception Flag"].astype(str).str.strip() != "").sum()) if "Cross-Type Exception Flag" in mvalid.columns else 0
+        if cross_flags:
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Cross-Type Flags", "Insight Text": f"{machine} has {cross_flags:,} CPT+H cross-type review flag(s).", "Metric Name": "Cross-Type Flags", "Metric Value": cross_flags, "Priority": "Review"})
+        std_cpth = machine_ccr_summary[(machine_ccr_summary["SALES MODEL"] == machine) & (machine_ccr_summary["CCR TYPE"] == "CPT+H") & (machine_ccr_summary["Cost View"] == "Standard")] if machine_ccr_summary is not None and not machine_ccr_summary.empty else pd.DataFrame()
+        adj_cpth = machine_ccr_summary[(machine_ccr_summary["SALES MODEL"] == machine) & (machine_ccr_summary["CCR TYPE"] == "CPT+H") & (machine_ccr_summary["Cost View"] == "Adjusted")] if machine_ccr_summary is not None and not machine_ccr_summary.empty else pd.DataFrame()
+        if not std_cpth.empty and not adj_cpth.empty:
+            std_val = std_cpth["Avg_Cost"].iloc[0]
+            adj_val = adj_cpth["Avg_Cost"].iloc[0]
+            diff_pct = (adj_val - std_val) / std_val * 100 if std_val else np.nan
+            removed = int(adj_cpth["Cross-Type Flags Removed"].iloc[0]) if "Cross-Type Flags Removed" in adj_cpth.columns else 0
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Adjusted CPT+H", "Insight Text": f"{machine} standard CPT+H is {money(std_val)}; adjusted CPT+H is {money(adj_val)} after removing {removed:,} flagged row(s), a {diff_pct:.1f}% change.", "Metric Name": "Adjusted CPT+H Difference %", "Metric Value": diff_pct, "Priority": "Info" if removed == 0 else "Review"})
+        if "Region" in mvalid.columns:
+            reg = mvalid.groupby("Region")[cost_col].mean().sort_values(ascending=False)
+            if len(reg) > 0:
+                rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Highest Region", "Insight Text": f"Highest average region for {machine} is {reg.index[0]} at {money(reg.iloc[0])}.", "Metric Name": "Highest Region Avg Cost", "Metric Value": reg.iloc[0], "Priority": "Info"})
+    return pd.DataFrame(rows)
 
 def build_parameter_summary_table():
     return pd.DataFrame({
@@ -1465,10 +1889,9 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     fact_rebuild = _add_run_columns(processed_df, run_id, scenario_label)
     fact_valid_rebuild = _add_run_columns(valid_df, run_id, scenario_label)
 
-    dim_machine = pd.DataFrame({"SALES MODEL": sorted(processed_df["SALES MODEL"].dropna().unique())}) if "SALES MODEL" in processed_df.columns else pd.DataFrame()
-    if not dim_machine.empty:
-        dim_machine["Machine Family"] = dim_machine["SALES MODEL"].astype(str).str.extract(r"(\d+)")[0].fillna(dim_machine["SALES MODEL"].astype(str))
-        dim_machine = _add_run_columns(dim_machine, run_id, scenario_label)
+    machine_dim_cols = [c for c in ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Machine Group Source", "Machine Group Notes"] if c in processed_df.columns]
+    dim_machine = processed_df[machine_dim_cols].drop_duplicates().sort_values("SALES MODEL").reset_index(drop=True) if machine_dim_cols else pd.DataFrame()
+    dim_machine = _add_run_columns(dim_machine, run_id, scenario_label)
 
     dealer_cols = [c for c in ["Dealer Code", "DEALER", "Region"] if c in processed_df.columns]
     dim_dealer = processed_df[dealer_cols].drop_duplicates().sort_values(dealer_cols).reset_index(drop=True) if dealer_cols else pd.DataFrame()
@@ -1500,6 +1923,10 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     fact_rate_coverage = _add_run_columns(analysis.get("dealer_rate_coverage_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     fact_data_quality = _add_run_columns(analysis.get("data_quality_score_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     data_quality_summary = _add_run_columns(analysis.get("data_quality_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    global_ccr_type_avg = _add_run_columns(analysis.get("global_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    region_ccr_type_avg = _add_run_columns(analysis.get("region_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    machine_ccr_type_avg = _add_run_columns(analysis.get("machine_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    machine_insights_export = _add_run_columns(analysis.get("machine_insights", pd.DataFrame()).copy(), run_id, scenario_label)
 
     run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
     additional_metadata = pd.DataFrame({
@@ -1508,7 +1935,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
             "Power BI Notes", "Generated Timestamp"
         ],
         "Value": [
-            run_id, scenario_label, export_mode_value, export_reason_value, "V16.2.2 Power BI Dataset Export",
+            run_id, scenario_label, export_mode_value, export_reason_value, "V16.3 Power BI Dataset Export",
             "Clean flat tables; no watermark rows, merged cells, decorative headers, or  marker rows. Use Run ID to relate scenario-specific tables.",
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ]
@@ -1517,7 +1944,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     if "Field" in run_metadata.columns:
         run_metadata = run_metadata[~run_metadata["Field"].astype(str).str.contains("Confidential|Removed Label", case=False, na=False)].copy()
     if "Value" in run_metadata.columns:
-        run_metadata = run_metadata[~run_metadata["Value"].astype(str).str.contains("", case=False, na=False)].copy()
+        run_metadata = run_metadata[~run_metadata["Value"].astype(str).str.contains("Confidential|Yellow|Removed Label", case=False, na=False)].copy()
 
     relationship_guide = pd.DataFrame({
         "From Table": [
@@ -1559,7 +1986,11 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         ]
     })
 
-    tables = {
+    scenario_comparison = build_scenario_comparison_table(analysis, run_id, scenario_label)
+    powerbi_instructions = build_powerbi_instructions_table()
+    powerbi_report_layout = build_powerbi_report_layout_table()
+    machine_grouping = _add_run_columns(analysis.get("machine_grouping_lookup", pd.DataFrame()).copy(), run_id, scenario_label)
+    provisional_tables = {
         "Fact_RebuildRows": fact_rebuild,
         "Fact_ValidRows": fact_valid_rebuild,
         "Dim_Machine": dim_machine,
@@ -1570,6 +2001,10 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Fact_ExceptionRows": fact_exceptions,
         "Fact_OutlierRows": fact_outliers,
         "Fact_CrossTypeFlags": fact_cross_flags,
+        "Fact_GlobalCCRTypeAvg": global_ccr_type_avg,
+        "Fact_RegionCCRTypeAvg": region_ccr_type_avg,
+        "Fact_MachineCCRTypeAvg": machine_ccr_type_avg,
+        "Fact_MachineInsights": machine_insights_export,
         "Fact_MachineSummary": fact_machine_summary,
         "Fact_DealerPerf": fact_dealer_performance,
         "Fact_RegionPerf": fact_region_performance,
@@ -1582,6 +2017,49 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
         "Relationship_Guide": relationship_guide,
         "DAX_Starter": dax_starter,
+        "PowerBI_Instructions": powerbi_instructions,
+        "PowerBI_Report_Layout": powerbi_report_layout,
+        "Scenario_Comparison": scenario_comparison,
+        "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
+        "Machine_Grouping": machine_grouping,
+    }
+    preview = build_powerbi_export_preview(provisional_tables, list(provisional_tables.keys()))
+    readiness = build_powerbi_readiness_score(preview)
+    provisional_tables["PowerBI_Readiness"] = pd.concat([readiness.assign(Section="Score"), preview.assign(Section="Table Check")], ignore_index=True, sort=False)
+
+    tables = {
+        "Fact_RebuildRows": fact_rebuild,
+        "Fact_ValidRows": fact_valid_rebuild,
+        "Dim_Machine": dim_machine,
+        "Dim_Dealer": dim_dealer,
+        "Dim_RebuildType": dim_rebuild_type,
+        "Dim_Region": dim_region,
+        "Dim_Date": dim_date,
+        "Fact_ExceptionRows": fact_exceptions,
+        "Fact_OutlierRows": fact_outliers,
+        "Fact_CrossTypeFlags": fact_cross_flags,
+        "Fact_GlobalCCRTypeAvg": global_ccr_type_avg,
+        "Fact_RegionCCRTypeAvg": region_ccr_type_avg,
+        "Fact_MachineCCRTypeAvg": machine_ccr_type_avg,
+        "Fact_MachineInsights": machine_insights_export,
+        "Fact_MachineSummary": fact_machine_summary,
+        "Fact_DealerPerf": fact_dealer_performance,
+        "Fact_RegionPerf": fact_region_performance,
+        "Fact_RateCoverage": fact_rate_coverage,
+        "Fact_DataQuality": fact_data_quality,
+        "DataQualitySummary": data_quality_summary,
+        "Run_Metadata": _clean_powerbi_columns(run_metadata),
+        "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
+        "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
+        "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
+        "Relationship_Guide": relationship_guide,
+        "DAX_Starter": dax_starter,
+        "PowerBI_Instructions": powerbi_instructions,
+        "PowerBI_Report_Layout": powerbi_report_layout,
+        "Scenario_Comparison": scenario_comparison,
+        "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
+        "Machine_Grouping": machine_grouping,
+        "PowerBI_Readiness": provisional_tables["PowerBI_Readiness"],
     }
     return {name: table for name, table in tables.items() if table is not None and isinstance(table, pd.DataFrame)}
 
@@ -1596,9 +2074,12 @@ def _strip_powerbi_confidential_marker_rows(df):
     return out.loc[~marker_mask].copy()
 
 
-def write_powerbi_dataset_workbook(writer, analysis, scenario_name_value, export_reason_value, export_mode_value):
+def write_powerbi_dataset_workbook(writer, analysis, scenario_name_value, export_reason_value, export_mode_value, selected_tables=None):
     tables = build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_value, export_mode_value)
+    selected_tables = selected_tables or list(tables.keys())
     for sheet_name, table in tables.items():
+        if sheet_name not in selected_tables:
+            continue
         safe_name = safe_sheet_name(sheet_name)
         clean_table = _strip_powerbi_confidential_marker_rows(table)
         # Explicit startrow=0 ensures row 1 is always the actual column header row for Power BI.
@@ -1606,6 +2087,66 @@ def write_powerbi_dataset_workbook(writer, analysis, scenario_name_value, export
         ws = writer.book[safe_name]
         # Freeze on row 2 for convenience only; no inserted rows, merged cells, or watermarking.
         ws.freeze_panes = "A2"
+
+
+def build_scenario_archive_package(analysis, scenario_name_value, export_reason_value, selected_tables=None):
+    """Create a handoff ZIP containing Power BI data, archive summary, and instructions."""
+    safe_scenario = re.sub(r"[^A-Za-z0-9_-]+", "_", scenario_name_value.strip()) if scenario_name_value else "Scenario"
+    archive_buffer = BytesIO()
+
+    pbi_buffer = BytesIO()
+    with pd.ExcelWriter(pbi_buffer, engine="openpyxl") as writer:
+        write_powerbi_dataset_workbook(writer, analysis, scenario_name_value, export_reason_value, "Power BI Dataset Export", selected_tables=selected_tables)
+    pbi_buffer.seek(0)
+
+    archive_xlsx = BytesIO()
+    with pd.ExcelWriter(archive_xlsx, engine="openpyxl") as writer:
+        analysis.get("metadata", pd.DataFrame()).to_excel(writer, sheet_name="Run Metadata", index=False)
+        analysis.get("filter_summary", pd.DataFrame()).to_excel(writer, sheet_name="Filter Summary", index=False)
+        analysis.get("parameter_summary", pd.DataFrame()).to_excel(writer, sheet_name="Parameters", index=False)
+        analysis.get("summary", pd.DataFrame()).to_excel(writer, sheet_name="Summary", index=False)
+        analysis.get("adjusted_summary", pd.DataFrame()).to_excel(writer, sheet_name="Adjusted Summary", index=False)
+        analysis.get("machine_benchmark_ranking", pd.DataFrame()).to_excel(writer, sheet_name="Machine Ranking", index=False)
+        analysis.get("global_ccr_type_summary", pd.DataFrame()).to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
+        analysis.get("region_ccr_type_summary", pd.DataFrame()).to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
+        analysis.get("machine_ccr_type_summary", pd.DataFrame()).to_excel(writer, sheet_name="Machine CCR Type Avg", index=False)
+        analysis.get("machine_insights", pd.DataFrame()).to_excel(writer, sheet_name="Machine Insights", index=False)
+        analysis.get("dealer_rate_coverage_summary", pd.DataFrame()).to_excel(writer, sheet_name="Rate Coverage", index=False)
+        analysis.get("data_quality_score_summary", pd.DataFrame()).to_excel(writer, sheet_name="Data Quality Score", index=False)
+        analysis.get("machine_grouping_lookup", pd.DataFrame()).to_excel(writer, sheet_name="Machine Grouping", index=False)
+        build_scenario_comparison_table(analysis, scenario_name_value=scenario_name_value).to_excel(writer, sheet_name="Scenario Comparison", index=False)
+        build_powerbi_instructions_table().to_excel(writer, sheet_name="PowerBI Instructions", index=False)
+        build_powerbi_report_layout_table().to_excel(writer, sheet_name="PowerBI Layout", index=False)
+        analysis.get("data_dictionary", pd.DataFrame()).to_excel(writer, sheet_name="Data Dictionary", index=False)
+        analysis.get("known_limitations", pd.DataFrame()).to_excel(writer, sheet_name="Known Limitations", index=False)
+        apply_excel_brand_formatting(writer.book)
+    archive_xlsx.seek(0)
+
+    readme = f"""Rebuild Analytics Scenario Archive
+Scenario: {scenario_name_value if scenario_name_value else 'Not provided'}
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+App Version: {APP_VERSION}
+Export Reason: {export_reason_value}
+
+Files included:
+1. Rebuild_Analysis_PowerBI_Dataset_{safe_scenario}.xlsx
+   - Clean Power BI-ready tables with headers on row 1.
+   - Use Relationship_Guide, DAX_Starter, PowerBI_Instructions, and PowerBI_Report_Layout.
+
+2. Rebuild_Analysis_Scenario_Archive_{safe_scenario}.xlsx
+   - Human-readable archive workbook with metadata, filters, summaries, grouping, methodology support tables, and handoff information.
+
+Recommended handoff use:
+- Store this ZIP with the source rebuild file and dealer-rate source used for the run.
+- If importing to Power BI, use the Power BI dataset workbook rather than the archive workbook.
+"""
+
+    with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"Rebuild_Analysis_PowerBI_Dataset_{safe_scenario}.xlsx", pbi_buffer.getvalue())
+        z.writestr(f"Rebuild_Analysis_Scenario_Archive_{safe_scenario}.xlsx", archive_xlsx.getvalue())
+        z.writestr("README_Handoff.txt", readme)
+    archive_buffer.seek(0)
+    return archive_buffer.getvalue()
 
 # =====================================================
 # MAIN UI INPUTS
@@ -1685,6 +2226,32 @@ else:
             st.error(f"Unable to parse dealer rate workbook: {exc}")
             st.stop()
 
+st.subheader("Machine Grouping")
+machine_group_file = None
+st.download_button(
+    "Download Machine Grouping Template",
+    data=create_machine_grouping_template(),
+    file_name="Machine_Grouping_Template.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+machine_group_file = st.file_uploader(
+    "Upload Custom Machine Grouping Workbook (optional)",
+    type=["xlsx"],
+    help="Optional override/enrichment file with SALES MODEL, Machine Group, Machine Family, Machine Category, and Notes.",
+)
+validate_uploaded_file_security(machine_group_file)
+if machine_group_file:
+    try:
+        machine_group_preview = parse_machine_grouping_file(machine_group_file)
+        st.write("### Machine Grouping Preview")
+        if machine_group_preview.empty:
+            st.warning("No valid machine grouping rows detected. Required columns: SALES MODEL and Machine Group.")
+        else:
+            display_table(machine_group_preview.head(50))
+    except Exception as exc:
+        st.error(f"Unable to parse machine grouping workbook: {exc}")
+        st.stop()
+
 apply_inflation = st.checkbox("Apply BLS CPI-U Inflation", True)
 base_year = st.number_input("Base Year for Inflation", 2010, 2030, 2026)
 machine_input = st.text_input("Machines (optional, comma-separated; leave blank for all)")
@@ -1707,7 +2274,20 @@ with st.expander("Advanced Threshold Configuration", expanded=False):
     max_rows_warning_threshold = st.number_input("Large-run row warning threshold", min_value=1000, max_value=250000, value=DEFAULT_MAX_ROWS_WARNING, step=1000)
 
 st.subheader("Export Controls")
-export_mode = st.selectbox("Full workbook export mode", ["Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Power BI Dataset Export"], index=0)
+export_mode = st.selectbox("Full workbook export mode", ["Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Power BI Dataset Export", "Scenario Archive Package"], index=0)
+powerbi_export_preset = "Standard"
+powerbi_selected_tables = DEFAULT_POWERBI_TABLES_STANDARD.copy()
+if export_mode in ["Power BI Dataset Export", "Scenario Archive Package"]:
+    st.write("### Power BI Export Table Selection")
+    powerbi_export_preset = st.selectbox("Power BI export preset", ["Standard", "Detailed", "Full Audit", "Custom"], index=0)
+    preset_tables = POWERBI_PRESET_MAP.get(powerbi_export_preset, DEFAULT_POWERBI_TABLES_STANDARD)
+    if powerbi_export_preset == "Custom":
+        powerbi_selected_tables = st.multiselect("Select Power BI tables to include", POWERBI_TABLE_OPTIONS, default=DEFAULT_POWERBI_TABLES_DETAILED)
+    else:
+        powerbi_selected_tables = st.multiselect("Tables included in this preset", POWERBI_TABLE_OPTIONS, default=preset_tables)
+    if not powerbi_selected_tables:
+        st.warning("Select at least one Power BI table before exporting.")
+
 export_reason = st.selectbox("Export reason", ["Manager review", "Dealer review", "Cost benchmarking", "Data validation", "Presentation support", "Other"], index=0)
 export_reason_other = ""
 if export_reason == "Other":
@@ -1784,6 +2364,9 @@ def run_analysis(rebuild_file, rate_file):
     df = df[df["Region Display"].isin(region_filter)].copy()
     if df.empty:
         raise ValueError("No rows remain after region filter.")
+
+    # V16.3: built-in automatic machine grouping with optional custom grouping override.
+    df, machine_grouping_lookup = apply_machine_grouping(df, machine_group_file)
 
     currency_col = detect_currency_column(df)
     if auto_currency and currency_col:
@@ -1924,6 +2507,10 @@ def run_analysis(rebuild_file, rate_file):
     adjusted_summary = adjusted_valid.groupby("CCR TYPE").agg(Adjusted_Avg_Cost=(cost_col, "mean"), Count=(cost_col, "count")).reset_index()
     adjusted_summary["CCR TYPE"] = adjusted_summary["CCR TYPE"].replace({"CPT+H": "CPT+H Adjusted"})
     adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
+    global_ccr_type_summary = build_combined_global_ccr_type_summary(valid, adjusted_valid, cost_col)
+    region_ccr_type_summary = build_combined_region_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
+    machine_ccr_type_summary = build_combined_machine_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
+    machine_insights = build_machine_insights_table(valid, df, machine_ccr_type_summary, cost_col)
     rebuild_reference = pd.DataFrame([{"CCR TYPE": key, "Description": value} for key, value in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
     metadata = pd.DataFrame({"Field": ["App Version", "Run Timestamp", "Rows Uploaded", "Rows After Filters", "Valid Rows", "Start Year", "End Year", "Base Year", "Machine Filter", "Rebuild Type Filter", "Region Filter", "Default Source Currency", "Dealer Rate Currency Mode", "Currency Column Detected", "BLS CPI Source", "FX Source", "Analysis Cost Used", "Dealer Rate Mode", "Dealer Rate Format", "Dealer Rate Fallback Behavior", "Dealer Rate Rows", "Dealer Rate Unique Dealers", "Scenario Name", "User Role View", "Strict Mode", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version", "CPT+H Threshold Multiplier", "Minimum CMR Benchmark Rows", "Dealer Rate Coverage Warning Threshold %", "Dealer Rate Coverage Strict Threshold %", "Data Quality Strict Minimum Score", "Large-Run Row Warning Threshold"], "Value": [APP_VERSION, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows_uploaded, len(df), len(valid), start_year, end_year, base_year, machine_input if machine_input else "All", ", ".join(rebuild_filter), ", ".join(region_filter), default_source_currency, dealer_rate_currency_mode, currency_col if currency_col else "None", cpi_source, "Frankfurter annual average; embedded fallback if unavailable", cost_col, "Built-in Expanded 2016-2026" if use_default or rate_file is None else "Uploaded Custom", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique(), scenario_name if scenario_name else "Not provided", user_role_view, "Yes" if strict_mode else "No", METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION, cross_type_threshold_multiplier, min_cmr_rows_for_benchmark, dealer_rate_coverage_warning_threshold, dealer_rate_coverage_strict_threshold, data_quality_strict_min_score, max_rows_warning_threshold]})
@@ -1946,7 +2533,7 @@ def run_analysis(rebuild_file, rate_file):
     machine_benchmark_ranking = build_machine_benchmark_ranking(valid, df, cost_col)
     executive_narrative = build_executive_narrative(valid, summary, cost_col, int(df["Outlier"].sum()), int((valid["Cross-Type Exception Flag"] != "").sum()), dealer_rate_coverage_summary, data_quality_score_summary, show_adjusted_cpth)
 
-    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards}
+    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards, "global_ccr_type_summary": global_ccr_type_summary, "region_ccr_type_summary": region_ccr_type_summary, "machine_ccr_type_summary": machine_ccr_type_summary, "machine_insights": machine_insights, "machine_grouping_lookup": machine_grouping_lookup, "filter_summary": build_filter_summary_table()}
 
 # =====================================================
 # RENDER RESULTS
@@ -1996,13 +2583,28 @@ if st.session_state.run_clicked and rebuild_file:
     data_dictionary = analysis.get("data_dictionary", pd.DataFrame())
     role_policy = analysis.get("role_policy", pd.DataFrame())
     performance_safeguards = analysis.get("performance_safeguards", pd.DataFrame())
+    global_ccr_type_summary = analysis.get("global_ccr_type_summary", pd.DataFrame())
+    region_ccr_type_summary = analysis.get("region_ccr_type_summary", pd.DataFrame())
+    machine_ccr_type_summary = analysis.get("machine_ccr_type_summary", pd.DataFrame())
+    machine_insights = analysis.get("machine_insights", pd.DataFrame())
+    filter_summary = analysis.get("filter_summary", pd.DataFrame())
+    machine_grouping_lookup = analysis.get("machine_grouping_lookup", pd.DataFrame())
 
-    tabs = st.tabs(["Executive Dashboard", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Executive Insights", "How to Use", "Methodology", "Governance & Dictionary", "Reference"])
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = tabs
+    tabs = st.tabs(["Executive Dashboard", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Executive Insights", "Power BI Readiness", "How to Use", "Methodology", "Governance & Dictionary", "Reference"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = tabs
 
     with tab1:
         st.subheader("Run Summary")
         display_table(metadata)
+        st.write("### Active Filter Summary")
+        if not filter_summary.empty:
+            fcols = st.columns(4)
+            filter_lookup = dict(zip(filter_summary["Filter"], filter_summary["Value"]))
+            fcols[0].metric("Scenario", str(filter_lookup.get("Scenario Name", "Not provided"))[:40])
+            fcols[1].metric("Years", str(filter_lookup.get("Years", "")))
+            fcols[2].metric("Machines", str(filter_lookup.get("Machines", "All"))[:40])
+            fcols[3].metric("Inflation", str(filter_lookup.get("Inflation Applied", "")))
+            display_table(filter_summary)
         st.write("### Run Readiness Check")
         display_table(run_readiness_summary)
         st.write("### Saved Parameter Summary")
@@ -2019,13 +2621,10 @@ if st.session_state.run_clicked and rebuild_file:
         col2.metric("Cost Outliers", f"{outlier_count:,}")
         col3.metric("Avg USD Analysis Cost", money(valid[cost_col].mean()))
         col4.metric("Cross-Type Flags", f"{cross_count:,}")
-        st.write("### Standard Rebuild Type Average Cost")
-        display_table(summary, currency_cols=["Avg_Cost"], percent_cols=["Vs CMR %"], smu_cols=["Avg_SMU"], number_cols=["Count"])
-        if show_adjusted_cpth:
-            st.write("### Adjusted Rebuild Type Average Cost")
-            display_table(adjusted_summary, currency_cols=["Adjusted_Avg_Cost"], number_cols=["Count"])
-        else:
-            st.info("Adjusted CPT+H comparison is hidden because both CMR and CPT+H records are required for this comparison.")
+        st.write("### Combined Global CCR Type Average Cost")
+        display_table(global_ccr_type_summary, currency_cols=["Avg_Cost", "Global CCR Avg Cost"], percent_cols=["Vs CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+        if not show_adjusted_cpth:
+            st.info("Adjusted CPT+H rows appear only when both CMR and CPT+H records are available for comparison.")
         st.write("### Machine Benchmark Ranking")
         display_table(machine_benchmark_ranking, currency_cols=["Avg_Cost"], percent_cols=["Outlier Rate %", "Dealer Rate Exception Rate %", "Vs Overall Avg %"], smu_cols=["Avg_SMU"], number_cols=["Valid_Rows", "Total_Rows", "Outlier_Rows", "Cross_Type_Flags", "Dealer_Rate_Exception_Rows", "Priority Score"])
         st.write("### SMU vs USD Analysis Cost by Rebuild Type")
@@ -2070,23 +2669,17 @@ if st.session_state.run_clicked and rebuild_file:
         machine_type_summary = dfm.groupby("CCR TYPE").agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count")).reset_index()
         machine_type_summary = add_vs_cmr(machine_type_summary)
         machine_type_summary["Sample Confidence"] = machine_type_summary["Count"].apply(sample_confidence)
-        st.write("### Average by Rebuild Type")
-        display_table(machine_type_summary, currency_cols=["Avg_Cost"], percent_cols=["Vs CMR %"], smu_cols=["Avg_SMU"], number_cols=["Count"])
-        st.write("### Bar Chart: Average Rebuild Cost by Type")
-        cat_bar_chart(machine_type_summary.rename(columns={"Avg_Cost": "Average Cost"}), "CCR TYPE", "Average Cost", "CCR TYPE", tooltip=["CCR TYPE", "Average Cost"])
-
-        machine_adjusted_summary = machine_adjusted_valid.groupby("CCR TYPE").agg(Adjusted_Avg_Cost=(cost_col, "mean"), Count=(cost_col, "count")).reset_index()
-        machine_adjusted_summary["CCR TYPE"] = machine_adjusted_summary["CCR TYPE"].replace({"CPT+H": "CPT+H Adjusted"})
-        machine_adjusted_summary["Sample Confidence"] = machine_adjusted_summary["Count"].apply(sample_confidence)
-        if machine_show_adjusted_cpth:
-            st.write("### Adjusted Average Rebuild Cost by Type")
-            display_table(machine_adjusted_summary, currency_cols=["Adjusted_Avg_Cost"], number_cols=["Count"])
-            if not machine_adjusted_summary.empty:
-                cat_bar_chart(machine_adjusted_summary.rename(columns={"Adjusted_Avg_Cost": "Adjusted Average Cost"}), "CCR TYPE", "Adjusted Average Cost", "CCR TYPE", tooltip=["CCR TYPE", "Adjusted Average Cost"])
-            else:
-                st.info("No adjusted rebuild cost data available for this machine.")
-        else:
-            st.info("Adjusted CPT+H comparison is hidden for this machine because both CMR and CPT+H records are required.")
+        st.write("### Combined Machine CCR Type Average Cost")
+        selected_machine_ccr = machine_ccr_type_summary[machine_ccr_type_summary["SALES MODEL"] == selected_machine].copy() if not machine_ccr_type_summary.empty else pd.DataFrame()
+        display_table(selected_machine_ccr, currency_cols=["Avg_Cost", "Machine CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Machine CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+        if not selected_machine_ccr.empty:
+            chart_data = selected_machine_ccr.rename(columns={"Avg_Cost": "Average Cost"})
+            cat_bar_chart(chart_data, "CCR TYPE", "Average Cost", "Cost View", tooltip=["CCR TYPE", "Cost View", "Average Cost"])
+        selected_machine_insights = machine_insights[machine_insights["SALES MODEL"] == selected_machine].copy() if not machine_insights.empty else pd.DataFrame()
+        st.write("### Machine-Level Insights")
+        display_table(selected_machine_insights, currency_cols=["Metric Value"])
+        if not machine_show_adjusted_cpth:
+            st.info("Adjusted CPT+H rows appear only when both CMR and CPT+H records are available for this machine.")
 
         st.write("### Machine SMU vs USD Analysis Cost")
         machine_chart = dfm[["SMU AT REBUILD", cost_col, "CCR TYPE"]].dropna().rename(columns={"SMU AT REBUILD": "SMU", cost_col: "Cost"})
@@ -2134,9 +2727,12 @@ if st.session_state.run_clicked and rebuild_file:
         region_summary = region_performance_for_df(region_df, cost_col)
         st.write(f"### Region Summary - {region_machine}")
         display_table(region_summary, currency_cols=["Avg_Cost"], percent_cols=["Vs Section Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross_Type_Flags"])
-        region_type = region_df.groupby(["Region", "CCR TYPE"]).agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count")).reset_index().sort_values(["Region", "CCR TYPE"])
-        st.write("### Region by Rebuild Type")
-        display_table(region_type, currency_cols=["Avg_Cost"], smu_cols=["Avg_SMU"], number_cols=["Count"])
+        region_type = region_ccr_type_summary.copy()
+        if region_machine != "All Machines":
+            region_adjusted_valid = region_df[~((region_df["CCR TYPE"] == "CPT+H") & (region_df["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
+            region_type = build_combined_region_ccr_type_summary(region_df, region_adjusted_valid, cost_col, global_ccr_type_summary)
+        st.write("### Region by CCR Type with Standard and Adjusted CPT+H")
+        display_table(region_type, currency_cols=["Avg_Cost", "Regional CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Regional CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
         st.write("### Region Average Cost Chart")
         if not region_summary.empty:
             cat_bar_chart(region_summary.rename(columns={"Avg_Cost": "Average Cost"}), "Region", "Average Cost", None, tooltip=["Region", "Average Cost"])
@@ -2211,8 +2807,35 @@ if st.session_state.run_clicked and rebuild_file:
         insights.append(f"Rows using fallback labor rates: {global_year_fallback_count + overall_fallback_count:,}.")
         for insight in insights:
             st.write("•", insight)
+        st.write("### Machine-Level Insights")
+        display_table(machine_insights, currency_cols=["Metric Value"])
 
     with tab7:
+        st.subheader("Power BI Export Preview & Readiness")
+        pbi_tables = build_powerbi_dataset_tables(analysis, scenario_name, export_reason_final, export_mode)
+        selected_for_preview = powerbi_selected_tables if export_mode in ["Power BI Dataset Export", "Scenario Archive Package"] else DEFAULT_POWERBI_TABLES_STANDARD
+        pbi_preview = build_powerbi_export_preview(pbi_tables, selected_for_preview)
+        pbi_readiness = build_powerbi_readiness_score(pbi_preview)
+        st.write("### Power BI Readiness Score")
+        display_table(pbi_readiness)
+        try:
+            readiness_label = pbi_readiness.loc[pbi_readiness["Metric"] == "Power BI Readiness", "Value"].iloc[0]
+            if readiness_label == "Ready":
+                st.success("Power BI export is ready. Headers should load correctly from row 1.")
+            elif readiness_label == "Needs Review":
+                st.warning("Power BI export is usable, but some selected tables should be reviewed.")
+            else:
+                st.error("Power BI export is not ready. Review table-level issues before importing.")
+        except Exception:
+            pass
+        st.write("### Included Power BI Tables")
+        display_table(pbi_preview, number_cols=["Rows", "Columns", "Blank Headers", "Duplicate Headers", "Marker Rows"])
+        st.write("### Machine Grouping Lookup")
+        display_table(machine_grouping_lookup)
+        st.write("### Scenario Comparison Row")
+        display_table(build_scenario_comparison_table(analysis, scenario_name_value=scenario_name), currency_cols=["Avg Cost"], percent_cols=["Outlier Rate %", "Dealer Rate Coverage %"], number_cols=["Valid Rows", "Total Rows", "Outlier Rows", "Cross-Type Flags"])
+
+    with tab8:
         st.subheader("How to Use This App")
         st.markdown("""
         1. Upload the rebuild workbook.
@@ -2224,18 +2847,20 @@ if st.session_state.run_clicked and rebuild_file:
         7. Review Exceptions & Data Quality before sharing results.
         8. If needed, manually change advanced thresholds; defaults preserve the standard methodology.
         9. Use Strict Mode only for formal review where the configured thresholds should stop weak runs.
-        10. Choose the least-detailed export mode and provide an export reason. Use Power BI Dataset Export when building Power BI reports.
-        11. Interpret Excel highlights: red = cost outlier, orange = cross-type exception, yellow = insufficient sample group.
+        10. Choose the least-detailed export mode and provide an export reason. Use Power BI Dataset Export when building Power BI reports, or Scenario Archive Package for handoff.
+        11. Use the Power BI Readiness tab to validate selected Power BI tables before export.
+            12. Use custom machine grouping when business-approved group names are needed.
+            13. Interpret Excel highlights: red = cost outlier, orange = cross-type exception, yellow = insufficient sample group.
         """)
 
-    with tab8:
+    with tab9:
         st.subheader("Methodology")
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.2.3 fix:** Removes the confidentiality label from the app UI, export acknowledgements, workbook watermark rows, workbook metadata, machine summaries, and Power BI dataset exports. Power BI Dataset Export keeps column headers directly on row 1 for every sheet.""")
+**V16.4 update:** Adds combined standard/adjusted CPT+H CCR-type cost tables, regional CCR-type comparison fields, and machine-level insights. Power BI Dataset Export keeps column headers directly on row 1 for every sheet.""")
 
-    with tab9:
+    with tab10:
         st.subheader("Governance & Data Dictionary")
         st.write("### Known Limitations")
         display_table(known_limitations)
@@ -2248,7 +2873,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.write("### Performance Safeguards")
         display_table(performance_safeguards)
 
-    with tab10:
+    with tab11:
         st.subheader("Configured Rebuild Types and Regions")
         st.write("### Certified Rebuild Types")
         st.dataframe(rebuild_reference, use_container_width=True)
@@ -2279,7 +2904,9 @@ if st.session_state.run_clicked and rebuild_file:
         # Dedicated clean Power BI writer. Do not write cover page, watermark rows, merged cells,
         # decorative formatting, or normal review-workbook tabs before the dataset tables.
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            write_powerbi_dataset_workbook(writer, analysis, scenario_name, export_reason_final, export_mode)
+            write_powerbi_dataset_workbook(writer, analysis, scenario_name, export_reason_final, export_mode, selected_tables=powerbi_selected_tables)
+    elif export_mode == "Scenario Archive Package":
+        output = BytesIO(build_scenario_archive_package(analysis, scenario_name, export_reason_final, selected_tables=powerbi_selected_tables))
     else:
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             cover_sheet.to_excel(writer, sheet_name="Cover Page", index=False)
@@ -2296,6 +2923,10 @@ if st.session_state.run_clicked and rebuild_file:
                 else:
                     pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
                 machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
+                global_ccr_type_summary.to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
+                region_ccr_type_summary.to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
+                machine_ccr_type_summary.to_excel(writer, sheet_name="Machine CCR Type Avg", index=False)
+                machine_insights.to_excel(writer, sheet_name="Machine Insights", index=False)
                 pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
             elif export_mode == "Exceptions Only":
                 exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
@@ -2317,6 +2948,10 @@ if st.session_state.run_clicked and rebuild_file:
                 else:
                     pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
                 machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
+                global_ccr_type_summary.to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
+                region_ccr_type_summary.to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
+                machine_ccr_type_summary.to_excel(writer, sheet_name="Machine CCR Type Avg", index=False)
+                machine_insights.to_excel(writer, sheet_name="Machine Insights", index=False)
                 pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
                 exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
                 data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
@@ -2339,9 +2974,22 @@ if st.session_state.run_clicked and rebuild_file:
             apply_confidential_watermark(writer.book, scenario_name)
     if render_export_acknowledgement("full_export_ack"):
         safe_scenario = re.sub(r"[^A-Za-z0-9_-]+", "_", scenario_name.strip()) if scenario_name else "Scenario"
-        download_label = "Download Power BI Dataset Workbook" if export_mode == "Power BI Dataset Export" else "Download Workbook"
-        export_prefix = "Rebuild_Analysis_PowerBI_Dataset" if export_mode == "Power BI Dataset Export" else "Rebuild_Analysis"
-        st.download_button(download_label, data=output.getvalue(), file_name=f"{export_prefix}_{safe_scenario}_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
+        if export_mode == "Power BI Dataset Export":
+            download_label = "Download Power BI Dataset Workbook"
+            export_prefix = "Rebuild_Analysis_PowerBI_Dataset"
+            file_ext = "xlsx"
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        elif export_mode == "Scenario Archive Package":
+            download_label = "Download Scenario Archive Package"
+            export_prefix = "Rebuild_Analysis_Scenario_Archive"
+            file_ext = "zip"
+            mime_type = "application/zip"
+        else:
+            download_label = "Download Workbook"
+            export_prefix = "Rebuild_Analysis"
+            file_ext = "xlsx"
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        st.download_button(download_label, data=output.getvalue(), file_name=f"{export_prefix}_{safe_scenario}_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.{file_ext}", mime=mime_type)
     else:
         st.info("Confirm export authorization to enable the full workbook download.")
     st.markdown("""<div class="cat-footer"><strong>Rebuild Analytics Platform</strong> | Internal analytics tool | Cost, inflation, dealer, region, outlier, cross-type exception, governance, performance-safeguard, and Power BI dataset reporting</div>""", unsafe_allow_html=True)
