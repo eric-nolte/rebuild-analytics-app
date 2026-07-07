@@ -14,13 +14,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.2"
+APP_VERSION = "V16.2.1"
 APP_LAST_UPDATED = "2026-06-30"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Confidential Yellow Phase 1"
-EXPORT_FORMAT_VERSION = "V16.2 Power BI Dataset Export"
+EXPORT_FORMAT_VERSION = "V16.2.1 Power BI Export Header Fix"
 CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -1525,7 +1525,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
             "Power BI Notes", "Confidentiality Label", "Generated Timestamp"
         ],
         "Value": [
-            run_id, scenario_label, export_mode_value, export_reason_value, "V16.2 Power BI Dataset Export",
+            run_id, scenario_label, export_mode_value, export_reason_value, "V16.2.1 Power BI Dataset Export",
             "Clean flat tables; no watermark rows, merged cells, or decorative headers. Use Run ID to relate scenario-specific tables.",
             CONFIDENTIALITY_LABEL, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ]
@@ -1711,7 +1711,7 @@ export_reason_other = ""
 if export_reason == "Other":
     export_reason_other = st.text_input("Describe export reason", "")
 export_reason_final = export_reason_other.strip() if export_reason == "Other" and export_reason_other.strip() else export_reason
-if user_role_view == "Viewer" and export_mode != "Summary Only":
+if user_role_view == "Viewer" and export_mode not in ["Summary Only", "Power BI Dataset Export"]:
     st.warning("Viewer role view is intended for limited distribution. Export mode has been changed to Summary Only for this session.")
     export_mode = "Summary Only"
 
@@ -2226,7 +2226,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.2 addition:** Adds a Power BI Dataset Export mode with clean fact, dimension, exception, metadata, relationship-guide, and DAX-starter tables. This mode is designed for Power BI import and intentionally avoids decorative workbook rows.""")
+**V16.2.1 fix:** Power BI Dataset Export now writes only clean Power BI tables with column headers on row 1. It does not add Cover Page rows, Confidential Yellow watermarks, merged cells, or decorative workbook formatting to Power BI export sheets.""")
 
     with tab9:
         st.subheader("Governance & Data Dictionary")
@@ -2269,62 +2269,64 @@ if st.session_state.run_clicked and rebuild_file:
         strict_mode_value=strict_mode,
     )
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        cover_sheet.to_excel(writer, sheet_name="Cover Page", index=False)
-        export_metadata.to_excel(writer, sheet_name="Run Metadata", index=False)
-        run_readiness_summary.to_excel(writer, sheet_name="Run Readiness", index=False)
-        dealer_rate_coverage_summary.to_excel(writer, sheet_name="Rate Coverage", index=False)
-        data_quality_score_summary.to_excel(writer, sheet_name="Data Quality Score", index=False)
-        parameter_summary.to_excel(writer, sheet_name="Parameters", index=False)
-        performance_safeguards.to_excel(writer, sheet_name="Performance Checks", index=False)
         if export_mode == "Power BI Dataset Export":
+            # Power BI mode intentionally writes ONLY clean flat tables.
+            # No coverpage/prewritten governance sheets, no watermark row, no merged cells, and no decorative formatting.
             write_powerbi_dataset_workbook(writer, analysis, scenario_name, export_reason_final, export_mode)
-        elif export_mode == "Summary Only":
-            summary.to_excel(writer, sheet_name="Summary", index=False)
-            if show_adjusted_cpth:
-                adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
-            else:
-                pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
-            machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
-            pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
-        elif export_mode == "Exceptions Only":
-            exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
-            data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
-            dealer_rate_exception_rows.to_excel(writer, sheet_name="Rate Exceptions", index=False)
-            outlier_perf_all.to_excel(writer, sheet_name="Outlier Performance", index=False)
-            cross_rows.to_excel(writer, sheet_name="Cross Type Flags", index=False)
-            df[df["Outlier"] == True].to_excel(writer, sheet_name="Outlier Rows", index=False)
-        elif export_mode == "Dealer Rate Audit":
-            dealer_rate_validation.to_excel(writer, sheet_name="Rate Validation", index=False)
-            dealer_rate_coverage_summary.to_excel(writer, sheet_name="Rate Coverage Detail", index=False)
-            dealer_rate_exception_rows.to_excel(writer, sheet_name="Rate Exceptions", index=False)
-            rate_df.to_excel(writer, sheet_name="Dealer Rates Used", index=False)
-            data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
         else:
-            summary.to_excel(writer, sheet_name="Summary", index=False)
-            if show_adjusted_cpth:
-                adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
+            cover_sheet.to_excel(writer, sheet_name="Cover Page", index=False)
+            export_metadata.to_excel(writer, sheet_name="Run Metadata", index=False)
+            run_readiness_summary.to_excel(writer, sheet_name="Run Readiness", index=False)
+            dealer_rate_coverage_summary.to_excel(writer, sheet_name="Rate Coverage", index=False)
+            data_quality_score_summary.to_excel(writer, sheet_name="Data Quality Score", index=False)
+            parameter_summary.to_excel(writer, sheet_name="Parameters", index=False)
+            performance_safeguards.to_excel(writer, sheet_name="Performance Checks", index=False)
+            if export_mode == "Summary Only":
+                summary.to_excel(writer, sheet_name="Summary", index=False)
+                if show_adjusted_cpth:
+                    adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
+                else:
+                    pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
+                machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
+                pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
+            elif export_mode == "Exceptions Only":
+                exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
+                data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
+                dealer_rate_exception_rows.to_excel(writer, sheet_name="Rate Exceptions", index=False)
+                outlier_perf_all.to_excel(writer, sheet_name="Outlier Performance", index=False)
+                cross_rows.to_excel(writer, sheet_name="Cross Type Flags", index=False)
+                df[df["Outlier"] == True].to_excel(writer, sheet_name="Outlier Rows", index=False)
+            elif export_mode == "Dealer Rate Audit":
+                dealer_rate_validation.to_excel(writer, sheet_name="Rate Validation", index=False)
+                dealer_rate_coverage_summary.to_excel(writer, sheet_name="Rate Coverage Detail", index=False)
+                dealer_rate_exception_rows.to_excel(writer, sheet_name="Rate Exceptions", index=False)
+                rate_df.to_excel(writer, sheet_name="Dealer Rates Used", index=False)
+                data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
             else:
-                pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
-            machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
-            pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
-            exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
-            data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
-            dealer_rate_validation.to_excel(writer, sheet_name="Rate Validation", index=False)
-            dealer_rate_exception_rows.to_excel(writer, sheet_name="Rate Exceptions", index=False)
-            rate_df.to_excel(writer, sheet_name="Dealer Rates Used", index=False)
-            outlier_perf_all.to_excel(writer, sheet_name="Outlier Performance", index=False)
-            cross_rows.to_excel(writer, sheet_name="Cross Type Flags", index=False)
-            df[df["Outlier"] == True].to_excel(writer, sheet_name="Outlier Rows", index=False)
-            pd.DataFrame({"Year": list(cpi_table.keys()), "CPI": list(cpi_table.values())}).sort_values("Year").to_excel(writer, sheet_name="BLS CPI", index=False)
-            fx_lookup.to_excel(writer, sheet_name="FX Rates", index=False)
-            rebuild_reference.to_excel(writer, sheet_name="Rebuild Type Reference", index=False)
-            region_reference.to_excel(writer, sheet_name="Region Reference", index=False)
-            known_limitations.to_excel(writer, sheet_name="Known Limitations", index=False)
-            data_dictionary.to_excel(writer, sheet_name="Data Dictionary", index=False)
-            role_policy.to_excel(writer, sheet_name="Role Design", index=False)
-            for machine in valid["SALES MODEL"].dropna().unique():
-                valid[valid["SALES MODEL"] == machine].to_excel(writer, sheet_name=safe_sheet_name(machine), index=False)
-        if export_mode != "Power BI Dataset Export":
+                summary.to_excel(writer, sheet_name="Summary", index=False)
+                if show_adjusted_cpth:
+                    adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
+                else:
+                    pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
+                machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
+                pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
+                exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
+                data_quality_summary.to_excel(writer, sheet_name="Data Quality", index=False)
+                dealer_rate_validation.to_excel(writer, sheet_name="Rate Validation", index=False)
+                dealer_rate_exception_rows.to_excel(writer, sheet_name="Rate Exceptions", index=False)
+                rate_df.to_excel(writer, sheet_name="Dealer Rates Used", index=False)
+                outlier_perf_all.to_excel(writer, sheet_name="Outlier Performance", index=False)
+                cross_rows.to_excel(writer, sheet_name="Cross Type Flags", index=False)
+                df[df["Outlier"] == True].to_excel(writer, sheet_name="Outlier Rows", index=False)
+                pd.DataFrame({"Year": list(cpi_table.keys()), "CPI": list(cpi_table.values())}).sort_values("Year").to_excel(writer, sheet_name="BLS CPI", index=False)
+                fx_lookup.to_excel(writer, sheet_name="FX Rates", index=False)
+                rebuild_reference.to_excel(writer, sheet_name="Rebuild Type Reference", index=False)
+                region_reference.to_excel(writer, sheet_name="Region Reference", index=False)
+                known_limitations.to_excel(writer, sheet_name="Known Limitations", index=False)
+                data_dictionary.to_excel(writer, sheet_name="Data Dictionary", index=False)
+                role_policy.to_excel(writer, sheet_name="Role Design", index=False)
+                for machine in valid["SALES MODEL"].dropna().unique():
+                    valid[valid["SALES MODEL"] == machine].to_excel(writer, sheet_name=safe_sheet_name(machine), index=False)
             apply_excel_brand_formatting(writer.book)
             apply_confidential_watermark(writer.book, scenario_name)
     if render_export_acknowledgement("full_export_ack"):
