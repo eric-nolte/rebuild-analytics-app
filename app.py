@@ -15,17 +15,17 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.4"
+APP_VERSION = "V16.5"
 APP_LAST_UPDATED = "2026-07-07"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V16.4 CCR Regional Cost & Machine Insights"
+EXPORT_FORMAT_VERSION = "V16.5 Rebuild-Type Group & Region Charts"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
-DEFAULT_POWERBI_TABLES_STANDARD = ["Fact_RebuildRows", "Dim_Machine", "Dim_Dealer", "Dim_RebuildType", "Dim_Region", "Dim_Date", "Fact_GlobalCCRTypeAvg", "Fact_RegionCCRTypeAvg", "Fact_MachineCCRTypeAvg", "Fact_MachineInsights", "Fact_MachineSummary", "Fact_DealerPerf", "Fact_RegionPerf", "Run_Metadata", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "Scenario_Comparison", "Filter_Summary"]
+DEFAULT_POWERBI_TABLES_STANDARD = ["Fact_RebuildRows", "Dim_Machine", "Dim_Dealer", "Dim_RebuildType", "Dim_Region", "Dim_Date", "Fact_GlobalCCRTypeAvg", "Fact_RegionCCRTypeAvg", "Fact_MachineCCRTypeAvg", "Fact_MachineGroupCCRTypeAvg", "Fact_MachineInsights", "Fact_MachineSummary", "Fact_DealerPerf", "Fact_RegionPerf", "Run_Metadata", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "Scenario_Comparison", "Filter_Summary"]
 DEFAULT_POWERBI_TABLES_DETAILED = DEFAULT_POWERBI_TABLES_STANDARD + ["Fact_ExceptionRows", "Fact_OutlierRows", "Fact_CrossTypeFlags", "Fact_RateCoverage", "Fact_DataQuality", "PowerBI_Readiness"]
 DEFAULT_POWERBI_TABLES_FULL_AUDIT = DEFAULT_POWERBI_TABLES_DETAILED + ["Fact_ValidRows", "DataQualitySummary", "Parameters", "Data_Dictionary", "Known_Limitations", "Machine_Grouping"]
 POWERBI_TABLE_OPTIONS = list(dict.fromkeys(DEFAULT_POWERBI_TABLES_FULL_AUDIT))
@@ -205,6 +205,72 @@ def cat_bar_chart(data, x, y, color=None, tooltip=None, height=360):
             color=color_encoding,
             tooltip=tooltip)
         .properties(height=height).configure_view(stroke="#D9D9D9").configure_axis(labelFontSize=12, titleFontSize=13).configure_legend(labelFontSize=12, titleFontSize=13))
+    st.altair_chart(chart, use_container_width=True)
+
+
+# =====================================================
+# CCR DISPLAY / REBUILD-TYPE CHART HELPERS
+# =====================================================
+CCR_DISPLAY_BASE_ORDER = {
+    "CMR": 1,
+    "CPT+H - Standard": 2,
+    "CPT+H - Adjusted": 3,
+    "CPT-O": 4,
+}
+COST_VIEW_SCALE = alt.Scale(domain=["Standard", "Adjusted"], range=["#000000", "#FFC500"])
+
+
+def ccr_display_label(ccr_type, cost_view):
+    ccr = str(ccr_type).strip()
+    view = str(cost_view).strip()
+    if ccr == "CPT+H" and view == "Adjusted":
+        return "CPT+H - Adjusted"
+    if ccr == "CPT+H":
+        return "CPT+H - Standard"
+    return ccr
+
+
+def ccr_display_order(label):
+    label = str(label).strip()
+    if label in CCR_DISPLAY_BASE_ORDER:
+        return CCR_DISPLAY_BASE_ORDER[label]
+    return 100 + abs(hash(label)) % 1000
+
+
+def add_ccr_display_columns(df):
+    out = df.copy()
+    if out.empty:
+        return out
+    if "Cost View" not in out.columns:
+        out["Cost View"] = "Standard"
+    out["CCR Display"] = out.apply(lambda r: ccr_display_label(r.get("CCR TYPE", ""), r.get("Cost View", "Standard")), axis=1)
+    out["CCR Display Order"] = out["CCR Display"].apply(ccr_display_order)
+    return out.sort_values([c for c in ["CCR Display Order", "CCR Display", "Cost View"] if c in out.columns])
+
+
+def cat_rebuild_type_bar_chart(data, value_col="Avg_Cost", height=360):
+    """Bar chart that treats CMR, CPT+H Standard, CPT+H Adjusted, and CPT-O as clean sections."""
+    if data is None or data.empty:
+        st.info("No rebuild-type chart data available.")
+        return
+    chart_df = add_ccr_display_columns(data).copy()
+    chart_df = chart_df.rename(columns={value_col: "Average Cost"})
+    sort_values = chart_df.sort_values("CCR Display Order")["CCR Display"].drop_duplicates().tolist()
+    chart = (
+        alt.Chart(chart_df)
+        .mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2, stroke="#000000", strokeWidth=0.45)
+        .encode(
+            x=alt.X("CCR Display:N", title="Rebuild Type", sort=sort_values,
+                    axis=alt.Axis(labelAngle=-25, labelColor="#1F1F1F", titleColor="#1F1F1F")),
+            y=alt.Y("Average Cost:Q", title="Average Cost", axis=alt.Axis(format="$,.0f", labelColor="#1F1F1F", titleColor="#1F1F1F", gridColor="#E6E6E6")),
+            color=alt.Color("Cost View:N", scale=COST_VIEW_SCALE, legend=alt.Legend(title="Cost View")),
+            tooltip=["CCR Display", "CCR TYPE", "Cost View", alt.Tooltip("Average Cost:Q", format="$,.0f"), "Count"],
+        )
+        .properties(height=height)
+        .configure_view(stroke="#D9D9D9")
+        .configure_axis(labelFontSize=12, titleFontSize=13)
+        .configure_legend(labelFontSize=12, titleFontSize=13)
+    )
     st.altair_chart(chart, use_container_width=True)
 
 # =====================================================
@@ -892,7 +958,8 @@ def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
     out["_sort"] = out["CCR TYPE"].map(sort_key).fillna(99)
     out["_view_sort"] = out["Cost View"].map({"Standard": 1, "Adjusted": 2}).fillna(9)
     out = out.sort_values(["_sort", "_view_sort", "CCR TYPE"]).drop(columns=["_sort", "_view_sort"])
-    return out[["Scope", "CCR TYPE", "Cost View", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Vs CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]]
+    out = add_ccr_display_columns(out)
+    return out[["Scope", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Vs CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]]
 
 
 def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
@@ -933,7 +1000,8 @@ def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
     lookup = global_ccr_summary.set_index(["CCR TYPE", "Cost View"])["Avg_Cost"].to_dict() if not global_ccr_summary.empty else {}
     out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
     out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
-    return out[["Region", "CCR TYPE", "Cost View", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Regional CMR Avg Cost", "Vs Regional CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]].sort_values(["Region", "CCR TYPE", "Cost View"])
+    out = add_ccr_display_columns(out)
+    return out[["Region", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Regional CMR Avg Cost", "Vs Regional CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]].sort_values(["Region", "CCR Display Order", "Cost View"])
 
 
 def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
@@ -976,9 +1044,57 @@ def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_co
     lookup = global_ccr_summary.set_index(["CCR TYPE", "Cost View"])["Avg_Cost"].to_dict() if not global_ccr_summary.empty else {}
     out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
     out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
-    desired = ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Machine CMR Avg Cost", "Vs Machine CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]
-    return out[[c for c in desired if c in out.columns]].sort_values(["SALES MODEL", "CCR TYPE", "Cost View"])
+    out = add_ccr_display_columns(out)
+    desired = ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Machine CMR Avg Cost", "Vs Machine CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]
+    return out[[c for c in desired if c in out.columns]].sort_values(["SALES MODEL", "CCR Display Order", "Cost View"])
 
+
+
+def build_combined_machine_group_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
+    """Machine Group / Family + CCR type summary focused on rebuild-type average cost, not total average."""
+    rows = []
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame()
+    group_cols = [c for c in ["Machine Group", "Machine Family", "Machine Category", "CCR TYPE"] if c in valid_df.columns]
+    if "Machine Group" not in group_cols:
+        return pd.DataFrame()
+    standard = valid_df.groupby(group_cols, dropna=False).agg(
+        Avg_Cost=(cost_col, "mean"),
+        Avg_SMU=("SMU AT REBUILD", "mean"),
+        Count=(cost_col, "count"),
+    ).reset_index()
+    standard["Cost View"] = "Standard"
+    standard["Cross-Type Flags Removed"] = 0
+    rows.append(standard)
+    if adjusted_valid_df is not None and not adjusted_valid_df.empty:
+        adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
+        if not adj_cpth.empty:
+            adj_group_cols = [c for c in group_cols if c in adj_cpth.columns]
+            adj = adj_cpth.groupby(adj_group_cols, dropna=False).agg(
+                Avg_Cost=(cost_col, "mean"),
+                Avg_SMU=("SMU AT REBUILD", "mean"),
+                Count=(cost_col, "count"),
+            ).reset_index()
+            adj["Cost View"] = "Adjusted"
+            if "Cross-Type Exception Flag" in valid_df.columns:
+                removed = valid_df[(valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")].groupby("Machine Group").size().to_dict()
+            else:
+                removed = {}
+            adj["Cross-Type Flags Removed"] = adj["Machine Group"].map(removed).fillna(0).astype(int)
+            rows.append(adj)
+    out = pd.concat(rows, ignore_index=True, sort=False)
+    out["Sample Confidence"] = out["Count"].apply(sample_confidence)
+    cmr_map = out[(out["CCR TYPE"] == "CMR") & (out["Cost View"] == "Standard")].set_index("Machine Group")["Avg_Cost"].to_dict()
+    out["Group CMR Avg Cost"] = out["Machine Group"].map(cmr_map)
+    out["Vs Group CMR %"] = np.where(out["Group CMR Avg Cost"].notna() & (out["Group CMR Avg Cost"] != 0), (out["Avg_Cost"] - out["Group CMR Avg Cost"]) / out["Group CMR Avg Cost"] * 100, np.nan)
+    if global_ccr_summary is None or global_ccr_summary.empty:
+        global_ccr_summary = build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col)
+    lookup = global_ccr_summary.set_index(["CCR TYPE", "Cost View"])["Avg_Cost"].to_dict() if not global_ccr_summary.empty else {}
+    out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
+    out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
+    out = add_ccr_display_columns(out)
+    wanted = ["Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Group CMR Avg Cost", "Vs Group CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]
+    return out[[c for c in wanted if c in out.columns]].sort_values(["Machine Group", "CCR Display Order", "Cost View"])
 
 def build_machine_insights_table(valid_df, processed_df, machine_ccr_summary, cost_col):
     """Generate row-based machine insights for app display and Power BI export."""
@@ -1926,6 +2042,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     global_ccr_type_avg = _add_run_columns(analysis.get("global_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     region_ccr_type_avg = _add_run_columns(analysis.get("region_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     machine_ccr_type_avg = _add_run_columns(analysis.get("machine_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    machine_group_ccr_type_avg = _add_run_columns(analysis.get("machine_group_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     machine_insights_export = _add_run_columns(analysis.get("machine_insights", pd.DataFrame()).copy(), run_id, scenario_label)
 
     run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
@@ -2004,6 +2121,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Fact_GlobalCCRTypeAvg": global_ccr_type_avg,
         "Fact_RegionCCRTypeAvg": region_ccr_type_avg,
         "Fact_MachineCCRTypeAvg": machine_ccr_type_avg,
+        "Fact_MachineGroupCCRTypeAvg": machine_group_ccr_type_avg,
         "Fact_MachineInsights": machine_insights_export,
         "Fact_MachineSummary": fact_machine_summary,
         "Fact_DealerPerf": fact_dealer_performance,
@@ -2041,6 +2159,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Fact_GlobalCCRTypeAvg": global_ccr_type_avg,
         "Fact_RegionCCRTypeAvg": region_ccr_type_avg,
         "Fact_MachineCCRTypeAvg": machine_ccr_type_avg,
+        "Fact_MachineGroupCCRTypeAvg": machine_group_ccr_type_avg,
         "Fact_MachineInsights": machine_insights_export,
         "Fact_MachineSummary": fact_machine_summary,
         "Fact_DealerPerf": fact_dealer_performance,
@@ -2110,6 +2229,7 @@ def build_scenario_archive_package(analysis, scenario_name_value, export_reason_
         analysis.get("global_ccr_type_summary", pd.DataFrame()).to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
         analysis.get("region_ccr_type_summary", pd.DataFrame()).to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
         analysis.get("machine_ccr_type_summary", pd.DataFrame()).to_excel(writer, sheet_name="Machine CCR Type Avg", index=False)
+        analysis.get("machine_group_ccr_type_summary", pd.DataFrame()).to_excel(writer, sheet_name="Group CCR Type Avg", index=False)
         analysis.get("machine_insights", pd.DataFrame()).to_excel(writer, sheet_name="Machine Insights", index=False)
         analysis.get("dealer_rate_coverage_summary", pd.DataFrame()).to_excel(writer, sheet_name="Rate Coverage", index=False)
         analysis.get("data_quality_score_summary", pd.DataFrame()).to_excel(writer, sheet_name="Data Quality Score", index=False)
@@ -2510,6 +2630,7 @@ def run_analysis(rebuild_file, rate_file):
     global_ccr_type_summary = build_combined_global_ccr_type_summary(valid, adjusted_valid, cost_col)
     region_ccr_type_summary = build_combined_region_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
     machine_ccr_type_summary = build_combined_machine_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
+    machine_group_ccr_type_summary = build_combined_machine_group_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
     machine_insights = build_machine_insights_table(valid, df, machine_ccr_type_summary, cost_col)
     rebuild_reference = pd.DataFrame([{"CCR TYPE": key, "Description": value} for key, value in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
@@ -2533,7 +2654,7 @@ def run_analysis(rebuild_file, rate_file):
     machine_benchmark_ranking = build_machine_benchmark_ranking(valid, df, cost_col)
     executive_narrative = build_executive_narrative(valid, summary, cost_col, int(df["Outlier"].sum()), int((valid["Cross-Type Exception Flag"] != "").sum()), dealer_rate_coverage_summary, data_quality_score_summary, show_adjusted_cpth)
 
-    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards, "global_ccr_type_summary": global_ccr_type_summary, "region_ccr_type_summary": region_ccr_type_summary, "machine_ccr_type_summary": machine_ccr_type_summary, "machine_insights": machine_insights, "machine_grouping_lookup": machine_grouping_lookup, "filter_summary": build_filter_summary_table()}
+    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards, "global_ccr_type_summary": global_ccr_type_summary, "region_ccr_type_summary": region_ccr_type_summary, "machine_ccr_type_summary": machine_ccr_type_summary, "machine_group_ccr_type_summary": machine_group_ccr_type_summary, "machine_insights": machine_insights, "machine_grouping_lookup": machine_grouping_lookup, "filter_summary": build_filter_summary_table()}
 
 # =====================================================
 # RENDER RESULTS
@@ -2586,6 +2707,7 @@ if st.session_state.run_clicked and rebuild_file:
     global_ccr_type_summary = analysis.get("global_ccr_type_summary", pd.DataFrame())
     region_ccr_type_summary = analysis.get("region_ccr_type_summary", pd.DataFrame())
     machine_ccr_type_summary = analysis.get("machine_ccr_type_summary", pd.DataFrame())
+    machine_group_ccr_type_summary = analysis.get("machine_group_ccr_type_summary", pd.DataFrame())
     machine_insights = analysis.get("machine_insights", pd.DataFrame())
     filter_summary = analysis.get("filter_summary", pd.DataFrame())
     machine_grouping_lookup = analysis.get("machine_grouping_lookup", pd.DataFrame())
@@ -2625,6 +2747,13 @@ if st.session_state.run_clicked and rebuild_file:
         display_table(global_ccr_type_summary, currency_cols=["Avg_Cost", "Global CCR Avg Cost"], percent_cols=["Vs CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
         if not show_adjusted_cpth:
             st.info("Adjusted CPT+H rows appear only when both CMR and CPT+H records are available for comparison.")
+        st.write("### Machine Group Average Cost by Rebuild Type")
+        display_table(machine_group_ccr_type_summary, currency_cols=["Avg_Cost", "Group CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Group CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+        if not machine_group_ccr_type_summary.empty:
+            group_options = sorted(machine_group_ccr_type_summary["Machine Group"].dropna().unique().tolist())
+            selected_group_for_chart = st.selectbox("Machine Group Rebuild-Type Chart", group_options, key="machine_group_ccr_chart_selector")
+            group_chart_data = machine_group_ccr_type_summary[machine_group_ccr_type_summary["Machine Group"] == selected_group_for_chart].copy()
+            cat_rebuild_type_bar_chart(group_chart_data, value_col="Avg_Cost")
         st.write("### Machine Benchmark Ranking")
         display_table(machine_benchmark_ranking, currency_cols=["Avg_Cost"], percent_cols=["Outlier Rate %", "Dealer Rate Exception Rate %", "Vs Overall Avg %"], smu_cols=["Avg_SMU"], number_cols=["Valid_Rows", "Total_Rows", "Outlier_Rows", "Cross_Type_Flags", "Dealer_Rate_Exception_Rows", "Priority Score"])
         st.write("### SMU vs USD Analysis Cost by Rebuild Type")
@@ -2673,8 +2802,18 @@ if st.session_state.run_clicked and rebuild_file:
         selected_machine_ccr = machine_ccr_type_summary[machine_ccr_type_summary["SALES MODEL"] == selected_machine].copy() if not machine_ccr_type_summary.empty else pd.DataFrame()
         display_table(selected_machine_ccr, currency_cols=["Avg_Cost", "Machine CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Machine CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
         if not selected_machine_ccr.empty:
-            chart_data = selected_machine_ccr.rename(columns={"Avg_Cost": "Average Cost"})
-            cat_bar_chart(chart_data, "CCR TYPE", "Average Cost", "Cost View", tooltip=["CCR TYPE", "Cost View", "Average Cost"])
+            cat_rebuild_type_bar_chart(selected_machine_ccr, value_col="Avg_Cost")
+        st.write("### Region Breakdown by Rebuild Type")
+        selected_machine_region_adjusted = dfm[~((dfm["CCR TYPE"] == "CPT+H") & (dfm["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
+        selected_machine_region_ccr = build_combined_region_ccr_type_summary(dfm, selected_machine_region_adjusted, cost_col, global_ccr_type_summary)
+        if selected_machine_region_ccr.empty:
+            st.info("No regional rebuild-type breakdown available for this machine.")
+        else:
+            display_table(selected_machine_region_ccr, currency_cols=["Avg_Cost", "Regional CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Regional CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+            for region_name in selected_machine_region_ccr["Region"].dropna().unique():
+                st.write(f"#### {region_name}")
+                region_chart_data = selected_machine_region_ccr[selected_machine_region_ccr["Region"] == region_name].copy()
+                cat_rebuild_type_bar_chart(region_chart_data, value_col="Avg_Cost", height=300)
         selected_machine_insights = machine_insights[machine_insights["SALES MODEL"] == selected_machine].copy() if not machine_insights.empty else pd.DataFrame()
         st.write("### Machine-Level Insights")
         display_table(selected_machine_insights, currency_cols=["Metric Value"])
@@ -2733,11 +2872,14 @@ if st.session_state.run_clicked and rebuild_file:
             region_type = build_combined_region_ccr_type_summary(region_df, region_adjusted_valid, cost_col, global_ccr_type_summary)
         st.write("### Region by CCR Type with Standard and Adjusted CPT+H")
         display_table(region_type, currency_cols=["Avg_Cost", "Regional CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Regional CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
-        st.write("### Region Average Cost Chart")
-        if not region_summary.empty:
-            cat_bar_chart(region_summary.rename(columns={"Avg_Cost": "Average Cost"}), "Region", "Average Cost", None, tooltip=["Region", "Average Cost"])
+        st.write("### Separate Region Charts by Rebuild Type")
+        if region_type.empty:
+            st.info("No region rebuild-type chart data available.")
         else:
-            st.info("No region summary data available.")
+            for region_name in region_type["Region"].dropna().unique():
+                st.write(f"#### {region_name}")
+                region_chart_data = region_type[region_type["Region"] == region_name].copy()
+                cat_rebuild_type_bar_chart(region_chart_data, value_col="Avg_Cost", height=300)
 
     with tab5:
         st.subheader("Exception Summary")
@@ -2858,7 +3000,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.4 update:** Adds combined standard/adjusted CPT+H CCR-type cost tables, regional CCR-type comparison fields, and machine-level insights. Power BI Dataset Export keeps column headers directly on row 1 for every sheet.""")
+**V16.5 update:** Refines rebuild-type charts so CMR, CPT+H Standard, CPT+H Adjusted, and CPT-O appear as separate sections; adds machine-group average cost by rebuild type; and places separate region-by-rebuild-type charts directly below the machine rebuild-type chart.""")
 
     with tab10:
         st.subheader("Governance & Data Dictionary")
@@ -2926,6 +3068,7 @@ if st.session_state.run_clicked and rebuild_file:
                 global_ccr_type_summary.to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
                 region_ccr_type_summary.to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
                 machine_ccr_type_summary.to_excel(writer, sheet_name="Machine CCR Type Avg", index=False)
+                machine_group_ccr_type_summary.to_excel(writer, sheet_name="Group CCR Type Avg", index=False)
                 machine_insights.to_excel(writer, sheet_name="Machine Insights", index=False)
                 pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
             elif export_mode == "Exceptions Only":
@@ -2951,6 +3094,7 @@ if st.session_state.run_clicked and rebuild_file:
                 global_ccr_type_summary.to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
                 region_ccr_type_summary.to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
                 machine_ccr_type_summary.to_excel(writer, sheet_name="Machine CCR Type Avg", index=False)
+                machine_group_ccr_type_summary.to_excel(writer, sheet_name="Group CCR Type Avg", index=False)
                 machine_insights.to_excel(writer, sheet_name="Machine Insights", index=False)
                 pd.DataFrame({"Executive Narrative": executive_narrative}).to_excel(writer, sheet_name="Executive Narrative", index=False)
                 exception_summary.to_excel(writer, sheet_name="Exceptions", index=False)
