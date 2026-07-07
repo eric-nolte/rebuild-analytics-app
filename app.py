@@ -15,13 +15,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V17.0"
+APP_VERSION = "V17.1"
 APP_LAST_UPDATED = "2026-07-07"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V17.0 Handoff & Power BI Labeling"
+EXPORT_FORMAT_VERSION = "V17.1 Template Instruction Upgrade"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -701,12 +701,28 @@ def normalize_machine_grouping_columns(df):
 
 
 def parse_machine_grouping_file(group_file):
+    """Parse custom machine grouping workbook.
+
+    Preferred V17.1 template format:
+    - Instructions: user guidance only
+    - Example: sample rows only
+    - User Input: actual data to upload
+
+    If a User Input sheet exists, only that sheet is parsed. If not, the parser
+    falls back to scanning other sheets for backward compatibility.
+    """
     if group_file is None:
         return pd.DataFrame(columns=["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes"])
     group_file.seek(0)
     sheets = pd.read_excel(group_file, sheet_name=None)
+    preferred_sheet = None
+    for sname in sheets.keys():
+        if str(sname).strip().lower() == "user input":
+            preferred_sheet = sname
+            break
+    candidate_items = [(preferred_sheet, sheets[preferred_sheet])] if preferred_sheet else [(sname, sheet) for sname, sheet in sheets.items() if str(sname).strip().lower() not in ["instructions", "example"]]
     frames = []
-    for sname, sheet in sheets.items():
+    for sname, sheet in candidate_items:
         temp = normalize_machine_grouping_columns(sheet)
         if {"SALES MODEL", "Machine Group"}.issubset(set(temp.columns)):
             if "Machine Family" not in temp.columns:
@@ -716,39 +732,59 @@ def parse_machine_grouping_file(group_file):
             if "Notes" not in temp.columns:
                 temp["Notes"] = ""
             temp = temp[["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes"]].copy()
-            temp["Machine Group Source"] = f"Custom Upload: {sname}"
-            frames.append(temp)
+            temp["SALES MODEL"] = temp["SALES MODEL"].astype(str).str.strip().str.upper()
+            temp["Machine Group"] = temp["Machine Group"].astype(str).str.strip()
+            temp = temp[(temp["SALES MODEL"] != "") & (temp["SALES MODEL"].str.upper() != "NAN") & (temp["Machine Group"] != "")]
+            if not temp.empty:
+                temp["Machine Group Source"] = f"Custom Upload: {sname}"
+                frames.append(temp)
     if not frames:
         return pd.DataFrame(columns=["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes", "Machine Group Source"])
     out = pd.concat(frames, ignore_index=True)
-    out["SALES MODEL"] = out["SALES MODEL"].astype(str).str.strip().str.upper()
     out = out[out["SALES MODEL"] != ""].drop_duplicates("SALES MODEL", keep="last")
     return out
 
 
 def create_machine_grouping_template():
-    template = pd.DataFrame({
+    """Return a three-sheet custom machine grouping template workbook."""
+    instructions = pd.DataFrame({
+        "Section": [
+            "Purpose", "How to Use", "How to Use", "How to Use", "How to Use", "How to Use",
+            "Required Field", "Required Field", "Optional Field", "Optional Field", "Optional Field",
+            "Validation Rule", "Validation Rule", "Validation Rule", "Upload Behavior", "Upload Behavior"
+        ],
+        "Instruction": [
+            "Use this template to upload custom machine grouping logic into the Rebuild Analytics Platform.",
+            "Read this Instructions sheet first.",
+            "Review the Example sheet to see the correct format.",
+            "Enter actual machine grouping data only on the User Input sheet.",
+            "Do not rename, delete, or reorder required columns.",
+            "Save the workbook as .xlsx and upload it in the Machine Grouping section of the app.",
+            "SALES MODEL must match the SALES MODEL value in the rebuild workbook.",
+            "Machine Group is the main grouping used for reporting, charts, and Power BI slicers.",
+            "Machine Family is optional but recommended for hierarchy reporting.",
+            "Machine Category is optional and can describe broad equipment type.",
+            "Notes is optional and can document why the grouping was chosen.",
+            "SALES MODEL cannot be blank.",
+            "Machine Group cannot be blank.",
+            "Each SALES MODEL should appear only once. If duplicates exist, the last valid row is used.",
+            "Uploaded custom grouping overrides or enriches the app's built-in automatic grouping.",
+            "Machines not included in User Input still use the built-in automatic grouping logic.",
+        ]
+    })
+    example = pd.DataFrame({
         "SALES MODEL": ["777F", "793F", "D11T", "988K"],
         "Machine Group": ["777 Series", "793 Series", "D11 Series", "988 Series"],
         "Machine Family": ["777", "793", "D11", "988"],
         "Machine Category": ["Truck", "Truck", "Track-Type Tractor", "Wheel Loader"],
         "Notes": ["Example only", "Example only", "Example only", "Example only"],
     })
-    instructions = pd.DataFrame({
-        "Field": ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes"],
-        "Requirement": ["Required", "Required", "Optional", "Optional", "Optional"],
-        "Description": [
-            "Machine model exactly as it appears in the rebuild file.",
-            "Custom group used for filtering and Power BI hierarchy.",
-            "Optional higher-level family label.",
-            "Optional category such as Truck, Dozer, Loader, Motor Grader, etc.",
-            "Optional notes for handoff/auditability.",
-        ]
-    })
+    user_input = pd.DataFrame(columns=["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Notes"])
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        template.to_excel(writer, sheet_name="Machine Grouping", index=False)
         instructions.to_excel(writer, sheet_name="Instructions", index=False)
+        example.to_excel(writer, sheet_name="Example", index=False)
+        user_input.to_excel(writer, sheet_name="User Input", index=False)
         apply_excel_brand_formatting(writer.book)
     output.seek(0)
     return output.getvalue()
@@ -976,8 +1012,8 @@ def build_required_files_checklist():
 def build_testing_checklist():
     return pd.DataFrame([
         {"Test": "App launches", "Expected Result": "Home page loads with no errors."},
-        {"Test": "Dealer-rate template download", "Expected Result": "Template downloads and opens with Dealer Rates and Instructions sheets."},
-        {"Test": "Machine-grouping template download", "Expected Result": "Template downloads and opens with Machine Grouping and Instructions sheets."},
+        {"Test": "Dealer-rate template download", "Expected Result": "Template downloads and opens with Instructions, Example, and User Input sheets."},
+        {"Test": "Machine-grouping template download", "Expected Result": "Template downloads and opens with Instructions, Example, and User Input sheets."},
         {"Test": "Rebuild workbook upload", "Expected Result": "Pre-run validation profile appears."},
         {"Test": "Run Analysis", "Expected Result": "Dashboard, Machine Detail, Dealer, Region, and Insights tabs populate."},
         {"Test": "Machine Detail chart", "Expected Result": "Chart shows CMR, CPT+H - Standard, CPT+H - Adjusted, and CPT-O as separate sections when present."},
@@ -1563,25 +1599,46 @@ def normalize_rate_columns(df):
 
 
 def parse_flat_rate_table(rate_file, sheet_name=None):
-    """Parse a preferred flat dealer-rate table from one sheet."""
+    """Parse a preferred flat dealer-rate table from one sheet.
+
+    Preferred V17.1 template format:
+    - Instructions: user guidance only
+    - Example: sample rows only
+    - User Input: actual data to upload
+
+    If a User Input sheet exists, only that sheet is parsed. If not, the parser
+    falls back to scanning other sheets for backward compatibility.
+    """
     sheets = pd.read_excel(rate_file, sheet_name=None)
     candidate_items = []
     if sheet_name and sheet_name in sheets:
         candidate_items = [(sheet_name, sheets[sheet_name])]
     else:
-        candidate_items = list(sheets.items())
+        preferred_sheet = None
+        for sname in sheets.keys():
+            if str(sname).strip().lower() == "user input":
+                preferred_sheet = sname
+                break
+        if preferred_sheet:
+            candidate_items = [(preferred_sheet, sheets[preferred_sheet])]
+        else:
+            candidate_items = [(sname, sheet) for sname, sheet in sheets.items() if str(sname).strip().lower() not in ["instructions", "example"]]
 
     for sname, sheet in candidate_items:
         temp = normalize_rate_columns(sheet)
         if {"Dealer Code", "Service Year", "Rate"}.issubset(set(temp.columns)):
             out = temp.copy()
-            out["Rate File Sheet"] = sname
-            out["Rate File Format"] = "Flat Table"
             if "Rate Currency" not in out.columns:
                 out["Rate Currency"] = "USD"
             if "Notes" not in out.columns:
                 out["Notes"] = ""
-            return out[["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"]]
+            out = out[["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes"]].copy()
+            out["Dealer Code"] = out["Dealer Code"].astype(str).str.strip().str.upper()
+            out = out[(out["Dealer Code"] != "") & (out["Dealer Code"].str.upper() != "NAN")]
+            if not out.empty:
+                out["Rate File Sheet"] = sname
+                out["Rate File Format"] = "Flat Table"
+                return out[["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"]]
     return pd.DataFrame(columns=["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"])
 
 
@@ -1590,7 +1647,7 @@ def parse_multisheet_rate_workbook(rate_file):
     sheets = pd.read_excel(rate_file, sheet_name=None)
     rows = []
     for sheet_name, sheet in sheets.items():
-        if str(sheet_name).strip().lower() == "summary":
+        if str(sheet_name).strip().lower() in ["summary", "instructions", "example"]:
             continue
         temp = normalize_rate_columns(sheet)
         dealer_code = normalize_dealer_code(str(sheet_name).split("_")[0].strip())
@@ -1673,29 +1730,46 @@ def validate_dealer_rate_table(rate_df, selected_start_year=None, selected_end_y
 
 
 def create_dealer_rate_template():
-    """Return a downloadable preferred flat dealer-rate template workbook."""
-    template = pd.DataFrame({
+    """Return a three-sheet preferred flat dealer-rate template workbook."""
+    instructions = pd.DataFrame({
+        "Section": [
+            "Purpose", "How to Use", "How to Use", "How to Use", "How to Use", "How to Use", "How to Use",
+            "Required Field", "Required Field", "Required Field", "Optional Field", "Optional Field",
+            "Validation Rule", "Validation Rule", "Validation Rule", "Validation Rule", "Upload Behavior"
+        ],
+        "Instruction": [
+            "Use this template to upload custom dealer labor rates into the Rebuild Analytics Platform.",
+            "Read this Instructions sheet first.",
+            "Review the Example sheet to see the correct format.",
+            "Enter actual dealer-rate data only on the User Input sheet.",
+            "Do not rename, delete, or reorder required columns.",
+            "Do not type dollar signs or currency symbols into the Rate field; use a numeric value only.",
+            "Save the workbook as .xlsx and upload it in the Custom Dealer Labor Rate Workbook section of the app.",
+            "Dealer Code must match the dealer code used in the rebuild file, such as A000 or B123.",
+            "Service Year must be a four-digit year, such as 2024 or 2025.",
+            "Rate must be numeric and greater than zero.",
+            "Rate Currency should be a three-letter currency code, such as USD, CAD, or EUR. If blank, the app expects USD.",
+            "Notes is optional and can document source, approval, or rate context.",
+            "Dealer Code cannot be blank.",
+            "Service Year must be numeric.",
+            "Rate must be numeric and greater than zero.",
+            "Each Dealer Code + Service Year combination should be unique. If duplicates exist after cleaning, the last valid row is used.",
+            "If a dealer-year rate is missing from the uploaded file, the app applies the selected fallback behavior and flags the affected rows.",
+        ]
+    })
+    example = pd.DataFrame({
         "Dealer Code": ["A000", "A000", "B123"],
         "Service Year": [2024, 2025, 2025],
         "Rate": [150.00, 155.00, 162.50],
         "Rate Currency": ["USD", "USD", "USD"],
         "Notes": ["Example only", "Example only", "Example only"],
     })
-    instructions = pd.DataFrame({
-        "Field": ["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes"],
-        "Requirement": ["Required", "Required", "Required", "Optional", "Optional"],
-        "Description": [
-            "Dealer code used in rebuild file, such as A000 or B123.",
-            "Calendar/service year for the labor rate.",
-            "Dealer labor rate for that service year. Must be positive numeric.",
-            "Currency code for the rate. Default expected value is USD.",
-            "Optional user notes for auditability.",
-        ]
-    })
+    user_input = pd.DataFrame(columns=["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes"])
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        template.to_excel(writer, sheet_name="Dealer Rates", index=False)
         instructions.to_excel(writer, sheet_name="Instructions", index=False)
+        example.to_excel(writer, sheet_name="Example", index=False)
+        user_input.to_excel(writer, sheet_name="User Input", index=False)
         apply_excel_brand_formatting(writer.book)
         apply_confidential_watermark(writer.book)
     output.seek(0)
@@ -2440,7 +2514,7 @@ else:
             display_table(validate_dealer_rate_table(preview_rates), number_cols=["Value"])
             st.write("### Dealer Rate Preview")
             display_table(preview_rates.head(50), currency_cols=["Rate"], number_cols=["Service Year"])
-            st.caption("Preferred flat table columns: Dealer Code, Service Year, Rate, Rate Currency, Notes. Legacy multi-sheet dealer workbooks are still supported.")
+            st.caption("Preferred template sheet is User Input with columns: Dealer Code, Service Year, Rate, Rate Currency, Notes. Legacy flat and multi-sheet dealer workbooks are still supported.")
         except Exception as exc:
             st.error(f"Unable to parse dealer rate workbook: {exc}")
             st.stop()
@@ -2456,7 +2530,7 @@ st.download_button(
 machine_group_file = st.file_uploader(
     "Upload Custom Machine Grouping Workbook (optional)",
     type=["xlsx"],
-    help="Optional override/enrichment file with SALES MODEL, Machine Group, Machine Family, Machine Category, and Notes.",
+    help="Optional override/enrichment file. Preferred template sheet is User Input with SALES MODEL, Machine Group, Machine Family, Machine Category, and Notes.",
 )
 validate_uploaded_file_security(machine_group_file)
 if machine_group_file:
