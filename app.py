@@ -15,19 +15,19 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.5"
+APP_VERSION = "V17.0"
 APP_LAST_UPDATED = "2026-07-07"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V16.5 Rebuild-Type Group & Region Charts"
+EXPORT_FORMAT_VERSION = "V17.0 Handoff & Power BI Labeling"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
-DEFAULT_POWERBI_TABLES_STANDARD = ["Fact_RebuildRows", "Dim_Machine", "Dim_Dealer", "Dim_RebuildType", "Dim_Region", "Dim_Date", "Fact_GlobalCCRTypeAvg", "Fact_RegionCCRTypeAvg", "Fact_MachineCCRTypeAvg", "Fact_MachineGroupCCRTypeAvg", "Fact_MachineInsights", "Fact_MachineSummary", "Fact_DealerPerf", "Fact_RegionPerf", "Run_Metadata", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "Scenario_Comparison", "Filter_Summary"]
-DEFAULT_POWERBI_TABLES_DETAILED = DEFAULT_POWERBI_TABLES_STANDARD + ["Fact_ExceptionRows", "Fact_OutlierRows", "Fact_CrossTypeFlags", "Fact_RateCoverage", "Fact_DataQuality", "PowerBI_Readiness"]
-DEFAULT_POWERBI_TABLES_FULL_AUDIT = DEFAULT_POWERBI_TABLES_DETAILED + ["Fact_ValidRows", "DataQualitySummary", "Parameters", "Data_Dictionary", "Known_Limitations", "Machine_Grouping"]
+DEFAULT_POWERBI_TABLES_STANDARD = ["Fact_Rebuild_Rows", "Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year", "Fact_Global_RebuildType_AvgCost", "Fact_Region_RebuildType_AvgCost", "Fact_Machine_RebuildType_AvgCost", "Fact_MachineGroup_RebuildType_AvgCost", "Fact_Machine_Insights", "Fact_Machine_Ranking", "Fact_Dealer_Performance", "Fact_Region_Performance", "Run_Metadata", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "Scenario_Comparison", "Filter_Summary"]
+DEFAULT_POWERBI_TABLES_DETAILED = DEFAULT_POWERBI_TABLES_STANDARD + ["Fact_Exception_Rows", "Fact_Outlier_Rows", "Fact_CrossType_Flags", "Fact_Rate_Coverage", "Fact_Data_Quality", "PowerBI_Readiness"]
+DEFAULT_POWERBI_TABLES_FULL_AUDIT = DEFAULT_POWERBI_TABLES_DETAILED + ["Fact_Valid_Rebuild_Rows", "DataQuality_Summary", "Parameters", "Data_Dictionary", "Known_Limitations", "Machine_Grouping", "PowerBI_Table_Dictionary", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
 POWERBI_TABLE_OPTIONS = list(dict.fromkeys(DEFAULT_POWERBI_TABLES_FULL_AUDIT))
 POWERBI_PRESET_MAP = {"Standard": DEFAULT_POWERBI_TABLES_STANDARD, "Detailed": DEFAULT_POWERBI_TABLES_DETAILED, "Full Audit": DEFAULT_POWERBI_TABLES_FULL_AUDIT}
 
@@ -816,7 +816,7 @@ def build_powerbi_export_preview(tables, selected_tables=None):
         cols = [str(c) for c in table.columns]
         blank_cols = sum(1 for c in cols if c.strip() == "" or c.startswith("Unnamed"))
         dup_cols = len(cols) - len(set(cols))
-        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout"]
+        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
         marker_rows = 0
         if not table.empty:
             first_col = table.columns[0]
@@ -902,7 +902,7 @@ def build_powerbi_instructions_table():
         "Notes": [
             "Use Power BI Dataset Export, not formatted review workbooks.",
             "Each sheet is designed with headers in row 1.",
-            "Fact_RebuildRows is the primary table.",
+            "Fact_Rebuild_Rows is the primary table.",
             "Most relationships are many-to-one from Fact tables to Dim tables.",
             "Review measure names and cost column before publishing.",
             "Run ID can support comparing multiple scenarios later.",
@@ -913,13 +913,92 @@ def build_powerbi_instructions_table():
 
 def build_powerbi_report_layout_table():
     return pd.DataFrame({
-        "Page": ["Executive Overview", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Scenario Comparison"],
-        "Visual": ["Cards + bar charts", "Slicers + scatter + bar", "Ranked bar/matrix", "Bar/matrix", "Tables + count by type", "Trend/table"],
-        "Primary Table": ["Fact_RebuildRows", "Fact_MachineCCRTypeAvg", "Fact_DealerPerf", "Fact_RegionCCRTypeAvg", "Fact_ExceptionRows", "Scenario_Comparison"],
-        "Suggested Fields": ["Avg Cost, Valid Rows, Outliers, Machine Group", "SALES MODEL, Machine Group, SMU, Cost, CCR TYPE", "Dealer Code, DEALER, Avg_Cost, Performance Label", "Region, Avg_Cost, Count", "Exception Type, Exception Detail, Cost", "Run ID, Scenario Name, Avg Cost, Outlier Rate %"],
-        "Purpose": ["High-level performance summary", "Analyze a selected machine/model", "Compare dealer cost performance", "Compare regional cost performance", "Review rows requiring attention", "Compare multiple exported scenarios"],
+        "Page": ["Executive Overview", "Machine Detail", "Machine Group View", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Scenario Comparison"],
+        "Visual": ["Cards + rebuild-type bar charts", "Slicers + rebuild-type chart + region charts", "Grouped rebuild-type chart", "Ranked bar/matrix", "Separate region rebuild-type charts", "Tables + count by type", "Trend/table"],
+        "Primary Table": ["Fact_Global_RebuildType_AvgCost", "Fact_Machine_RebuildType_AvgCost", "Fact_MachineGroup_RebuildType_AvgCost", "Fact_Dealer_Performance", "Fact_Region_RebuildType_AvgCost", "Fact_Exception_Rows", "Scenario_Comparison"],
+        "Suggested Fields": ["CCR Display, Cost View, Avg_Cost, Count", "SALES MODEL, CCR Display, Avg_Cost, Region", "Machine Group, CCR Display, Avg_Cost", "Dealer Code, DEALER, Avg_Cost, Performance Label", "Region, CCR Display, Avg_Cost, Vs Regional CMR %", "Exception Type, Exception Detail, Cost", "Run ID, Scenario Name, Avg Cost, Outlier Rate %"],
+        "Purpose": ["High-level rebuild-type cost summary", "Analyze a selected machine/model", "Compare machine families by rebuild type", "Compare dealer cost performance", "Compare regional cost performance by rebuild type", "Review rows requiring attention", "Compare multiple exported scenarios"],
     })
 
+
+
+def build_powerbi_table_dictionary():
+    """Business-friendly dictionary for every Power BI export table."""
+    return pd.DataFrame([
+        {"Table Name": "Fact_Rebuild_Rows", "Purpose": "Primary processed rebuild row table, including costs, flags, dealer rates, CPI, FX, and source attributes.", "Typical Power BI Use": "Main fact table for slicers, row-level tables, cost measures, and exception filtering.", "Key Fields": "Run ID, SALES MODEL, Machine Group, Dealer Code, Region, CCR TYPE, Cost View fields, cost columns, Outlier, Cross-Type Exception Flag"},
+        {"Table Name": "Fact_Valid_Rebuild_Rows", "Purpose": "Non-outlier processed rebuild rows used in core average calculations.", "Typical Power BI Use": "Use when visuals should match the app's core valid averages exactly.", "Key Fields": "Run ID, SALES MODEL, Region, CCR TYPE, cost columns, SMU AT REBUILD"},
+        {"Table Name": "Dim_Machine", "Purpose": "Machine model and machine grouping lookup.", "Typical Power BI Use": "Machine slicers, grouping hierarchy, and model-level filtering.", "Key Fields": "SALES MODEL, Machine Group, Machine Family, Machine Category"},
+        {"Table Name": "Dim_Dealer", "Purpose": "Dealer and region lookup table.", "Typical Power BI Use": "Dealer slicers and dealer-level performance pages.", "Key Fields": "Dealer Code, DEALER, Region"},
+        {"Table Name": "Dim_Rebuild_Type", "Purpose": "Certified rebuild type reference table.", "Typical Power BI Use": "Rebuild type slicers and lookup descriptions.", "Key Fields": "CCR TYPE, Rebuild Description"},
+        {"Table Name": "Dim_Region", "Purpose": "Configured region reference table.", "Typical Power BI Use": "Region slicers and region-level charts.", "Key Fields": "Region, Configured Region Flag"},
+        {"Table Name": "Dim_Service_Year", "Purpose": "Service year dimension.", "Typical Power BI Use": "Year slicers and trend visuals.", "Key Fields": "Service Year, Year, Year Label"},
+        {"Table Name": "Fact_Global_RebuildType_AvgCost", "Purpose": "Global average cost by rebuild type, with CPT+H Standard and CPT+H Adjusted kept together.", "Typical Power BI Use": "Executive rebuild-type average cost bar charts.", "Key Fields": "CCR Display, CCR TYPE, Cost View, Avg_Cost, Count"},
+        {"Table Name": "Fact_Region_RebuildType_AvgCost", "Purpose": "Average cost by region and rebuild type, including regional CMR and global rebuild-type comparison fields.", "Typical Power BI Use": "Separate region charts and regional matrix views.", "Key Fields": "Region, CCR Display, Avg_Cost, Vs Regional CMR %, Vs Global CCR Avg %"},
+        {"Table Name": "Fact_Machine_RebuildType_AvgCost", "Purpose": "Average cost by machine and rebuild type, including adjusted CPT+H rows.", "Typical Power BI Use": "Machine detail charts and rebuild-type drill-through pages.", "Key Fields": "SALES MODEL, CCR Display, Avg_Cost, Vs Machine CMR %, Count"},
+        {"Table Name": "Fact_MachineGroup_RebuildType_AvgCost", "Purpose": "Average cost by machine group/family and rebuild type, not just total average cost.", "Typical Power BI Use": "Machine family/group comparison charts.", "Key Fields": "Machine Group, Machine Family, CCR Display, Avg_Cost, Count"},
+        {"Table Name": "Fact_Machine_Insights", "Purpose": "Machine-level narrative insights in table form.", "Typical Power BI Use": "Machine insight cards/tables and drill-through notes.", "Key Fields": "SALES MODEL, Insight Category, Insight Text, Metric Name, Metric Value, Priority"},
+        {"Table Name": "Fact_Machine_Ranking", "Purpose": "Machine ranking and priority scoring output.", "Typical Power BI Use": "Executive ranking tables and priority-score visuals.", "Key Fields": "SALES MODEL, Avg_Cost, Priority Score, Priority Label"},
+        {"Table Name": "Fact_Dealer_Performance", "Purpose": "Dealer-level performance scoring and cost position metrics.", "Typical Power BI Use": "Dealer scorecards and review-needed dealer lists.", "Key Fields": "Dealer Code, DEALER, Avg_Cost, Performance Score, Performance Label"},
+        {"Table Name": "Fact_Region_Performance", "Purpose": "Region-level performance summary.", "Typical Power BI Use": "Region scorecards and regional summary pages.", "Key Fields": "Region, Avg_Cost, Count, Outlier Rate %, Vs Overall Avg %"},
+        {"Table Name": "Fact_Exception_Rows", "Purpose": "Unified exception table for outliers, cross-type flags, data-quality flags, dealer-rate exceptions, and FX fallback rows.", "Typical Power BI Use": "Exception review page and drill-through table.", "Key Fields": "Exception Type, Exception Detail, SALES MODEL, Region, Cost"},
+        {"Table Name": "Fact_Outlier_Rows", "Purpose": "Only rows flagged as cost outliers.", "Typical Power BI Use": "Outlier audit page.", "Key Fields": "SALES MODEL, CCR TYPE, Outlier Reason, cost columns"},
+        {"Table Name": "Fact_CrossType_Flags", "Purpose": "CPT+H rows flagged above the machine-level CMR benchmark.", "Typical Power BI Use": "Cross-type exception page.", "Key Fields": "SALES MODEL, CCR TYPE, CMR Benchmark Cost, Cross-Type Exception Flag"},
+        {"Table Name": "Fact_Rate_Coverage", "Purpose": "Dealer labor-rate coverage and fallback summary.", "Typical Power BI Use": "Rate governance scorecard.", "Key Fields": "Metric, Value"},
+        {"Table Name": "Fact_Data_Quality", "Purpose": "Data quality score and supporting data-quality metrics.", "Typical Power BI Use": "Data quality scorecard.", "Key Fields": "Metric, Value"},
+        {"Table Name": "Run_Metadata", "Purpose": "Run settings, methodology version, selected filters, and export context.", "Typical Power BI Use": "Report footer, tooltips, and audit pages.", "Key Fields": "Field, Value"},
+        {"Table Name": "Relationship_Guide", "Purpose": "Suggested model relationships for Power BI.", "Typical Power BI Use": "Build guide for semantic model setup.", "Key Fields": "From Table, From Column, To Table, To Column"},
+        {"Table Name": "DAX_Starter", "Purpose": "Starter DAX measures for report builders.", "Typical Power BI Use": "Copy/paste or adapt initial measures.", "Key Fields": "Measure Name, DAX Expression"},
+    ])
+
+
+def build_export_mode_dictionary():
+    return pd.DataFrame([
+        {"Export Mode": "Full Analysis Workbook", "Best For": "Human review and detailed Excel audit", "Notes": "Includes formatted sheets, tables, exceptions, references, and per-machine tabs."},
+        {"Export Mode": "Summary Only", "Best For": "Fast manager review", "Notes": "Contains summary, machine ranking, key metadata, and support sheets without large raw data tabs."},
+        {"Export Mode": "Exceptions Only", "Best For": "Outlier, data-quality, and cross-type review", "Notes": "Use when the user only needs rows requiring attention."},
+        {"Export Mode": "Dealer Rate Audit", "Best For": "Validating dealer labor rate coverage", "Notes": "Includes rate validation, rate coverage, rate exceptions, and dealer rates used."},
+        {"Export Mode": "Power BI Dataset Export", "Best For": "Power BI Desktop / Power BI semantic model creation", "Notes": "Clean table export with headers on row 1. Do not use formatted review workbook for Power BI imports."},
+        {"Export Mode": "Scenario Archive Package", "Best For": "Handoff and scenario preservation", "Notes": "ZIP package with clean Power BI dataset, archive workbook, and README."},
+    ])
+
+
+def build_required_files_checklist():
+    return pd.DataFrame([
+        {"Item": "app.py", "Required": "Yes", "Purpose": "Main application code."},
+        {"Item": "requirements.txt", "Required": "Yes", "Purpose": "Python package list for deployment."},
+        {"Item": "expanded_dealer_base_rate_by_year_2016_2026.xlsx", "Required": "Yes for built-in dealer rates", "Purpose": "Expanded built-in dealer labor-rate workbook."},
+        {"Item": "cat_logo.png", "Required": "Optional", "Purpose": "Approved logo file if allowed by internal branding rules."},
+        {"Item": "Dealer_Rate_Template.xlsx", "Required": "Generated by app", "Purpose": "Template for custom dealer-rate uploads."},
+        {"Item": "Machine_Grouping_Template.xlsx", "Required": "Generated by app", "Purpose": "Template for custom machine grouping overrides."},
+    ])
+
+
+def build_testing_checklist():
+    return pd.DataFrame([
+        {"Test": "App launches", "Expected Result": "Home page loads with no errors."},
+        {"Test": "Dealer-rate template download", "Expected Result": "Template downloads and opens with Dealer Rates and Instructions sheets."},
+        {"Test": "Machine-grouping template download", "Expected Result": "Template downloads and opens with Machine Grouping and Instructions sheets."},
+        {"Test": "Rebuild workbook upload", "Expected Result": "Pre-run validation profile appears."},
+        {"Test": "Run Analysis", "Expected Result": "Dashboard, Machine Detail, Dealer, Region, and Insights tabs populate."},
+        {"Test": "Machine Detail chart", "Expected Result": "Chart shows CMR, CPT+H - Standard, CPT+H - Adjusted, and CPT-O as separate sections when present."},
+        {"Test": "Machine Detail region breakdown", "Expected Result": "Region breakdown appears once, directly below the machine rebuild-type chart."},
+        {"Test": "Power BI export", "Expected Result": "Power BI workbook sheets have headers on row 1 and no marker/watermark rows."},
+        {"Test": "Power BI readiness", "Expected Result": "Selected tables show Ready or explain Needs Review / Not Ready."},
+        {"Test": "Excel export", "Expected Result": "Workbook exports, outlier rows highlight red, cross-type rows orange, insufficient samples yellow."},
+    ])
+
+
+def build_update_process_table():
+    return pd.DataFrame([
+        {"Step": 1, "Action": "Back up current app.py", "Reason": "Provides rollback if a new version fails."},
+        {"Step": 2, "Action": "Update code in a test branch/file", "Reason": "Avoids breaking the deployed app during edits."},
+        {"Step": 3, "Action": "Run syntax check", "Reason": "Catches Python syntax errors before deployment."},
+        {"Step": 4, "Action": "Test with a known sample workbook", "Reason": "Confirms methodology outputs are stable."},
+        {"Step": 5, "Action": "Test Power BI export headers", "Reason": "Ensures row 1 is the true header row for every selected table."},
+        {"Step": 6, "Action": "Test selected-machine export", "Reason": "Confirms machine handoff package still works."},
+        {"Step": 7, "Action": "Commit to GitHub and reboot deployment", "Reason": "Makes the update live."},
+        {"Step": 8, "Action": "Update changelog / handoff notes", "Reason": "Future users can understand what changed and why."},
+    ])
 
 def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col):
     """Global CCR type summary with Standard and Adjusted CPT+H in the same table."""
@@ -2065,15 +2144,15 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
 
     relationship_guide = pd.DataFrame({
         "From Table": [
-            "Fact_RebuildRows", "Fact_RebuildRows", "Fact_RebuildRows", "Fact_RebuildRows", "Fact_RebuildRows",
-            "Fact_MachineSummary", "Fact_DealerPerformance", "Fact_RegionPerformance", "Fact_ExceptionRows"
+            "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows",
+            "Fact_Machine_Ranking", "Fact_DealerPerformance", "Fact_RegionPerformance", "Fact_Exception_Rows"
         ],
         "From Column": [
             "SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year",
             "SALES MODEL", "Dealer Code", "Region", "SALES MODEL"
         ],
         "To Table": [
-            "Dim_Machine", "Dim_Dealer", "Dim_RebuildType", "Dim_Region", "Dim_Date",
+            "Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
             "Dim_Machine", "Dim_Dealer", "Dim_Region", "Dim_Machine"
         ],
         "To Column": [
@@ -2092,14 +2171,14 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
             "Cross-Type Flags", "Dealer Rate Exceptions", "Average SMU"
         ],
         "DAX Expression": [
-            f"Average Cost = AVERAGE(Fact_RebuildRows[{cost_col}])",
-            "Valid Rows = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Outlier] = FALSE())",
-            "Total Rows = COUNTROWS(Fact_RebuildRows)",
-            "Outlier Rows = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Outlier] = TRUE())",
+            f"Average Cost = AVERAGE(Fact_Rebuild_Rows[{cost_col}])",
+            "Valid Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = FALSE())",
+            "Total Rows = COUNTROWS(Fact_Rebuild_Rows)",
+            "Outlier Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = TRUE())",
             "Outlier Rate % = DIVIDE([Outlier Rows], [Total Rows])",
-            "Cross-Type Flags = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Cross-Type Exception Flag] <> \"\")",
-            "Dealer Rate Exceptions = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Dealer Rate Exception Flag] <> \"\")",
-            "Average SMU = AVERAGE(Fact_RebuildRows[SMU AT REBUILD])",
+            "Cross-Type Flags = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Cross-Type Exception Flag] <> \"\")",
+            "Dealer Rate Exceptions = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Dealer Rate Exception Flag] <> \"\")",
+            "Average SMU = AVERAGE(Fact_Rebuild_Rows[SMU AT REBUILD])",
         ]
     })
 
@@ -2107,28 +2186,33 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     powerbi_instructions = build_powerbi_instructions_table()
     powerbi_report_layout = build_powerbi_report_layout_table()
     machine_grouping = _add_run_columns(analysis.get("machine_grouping_lookup", pd.DataFrame()).copy(), run_id, scenario_label)
+    powerbi_table_dictionary = build_powerbi_table_dictionary()
+    export_mode_dictionary = build_export_mode_dictionary()
+    required_files_table = build_required_files_checklist()
+    testing_checklist_table = build_testing_checklist()
+    update_process_table = build_update_process_table()
     provisional_tables = {
-        "Fact_RebuildRows": fact_rebuild,
-        "Fact_ValidRows": fact_valid_rebuild,
+        "Fact_Rebuild_Rows": fact_rebuild,
+        "Fact_Valid_Rebuild_Rows": fact_valid_rebuild,
         "Dim_Machine": dim_machine,
         "Dim_Dealer": dim_dealer,
-        "Dim_RebuildType": dim_rebuild_type,
+        "Dim_Rebuild_Type": dim_rebuild_type,
         "Dim_Region": dim_region,
-        "Dim_Date": dim_date,
-        "Fact_ExceptionRows": fact_exceptions,
-        "Fact_OutlierRows": fact_outliers,
-        "Fact_CrossTypeFlags": fact_cross_flags,
-        "Fact_GlobalCCRTypeAvg": global_ccr_type_avg,
-        "Fact_RegionCCRTypeAvg": region_ccr_type_avg,
-        "Fact_MachineCCRTypeAvg": machine_ccr_type_avg,
-        "Fact_MachineGroupCCRTypeAvg": machine_group_ccr_type_avg,
-        "Fact_MachineInsights": machine_insights_export,
-        "Fact_MachineSummary": fact_machine_summary,
-        "Fact_DealerPerf": fact_dealer_performance,
-        "Fact_RegionPerf": fact_region_performance,
-        "Fact_RateCoverage": fact_rate_coverage,
-        "Fact_DataQuality": fact_data_quality,
-        "DataQualitySummary": data_quality_summary,
+        "Dim_Service_Year": dim_date,
+        "Fact_Exception_Rows": fact_exceptions,
+        "Fact_Outlier_Rows": fact_outliers,
+        "Fact_CrossType_Flags": fact_cross_flags,
+        "Fact_Global_RebuildType_AvgCost": global_ccr_type_avg,
+        "Fact_Region_RebuildType_AvgCost": region_ccr_type_avg,
+        "Fact_Machine_RebuildType_AvgCost": machine_ccr_type_avg,
+        "Fact_MachineGroup_RebuildType_AvgCost": machine_group_ccr_type_avg,
+        "Fact_Machine_Insights": machine_insights_export,
+        "Fact_Machine_Ranking": fact_machine_summary,
+        "Fact_Dealer_Performance": fact_dealer_performance,
+        "Fact_Region_Performance": fact_region_performance,
+        "Fact_Rate_Coverage": fact_rate_coverage,
+        "Fact_Data_Quality": fact_data_quality,
+        "DataQuality_Summary": data_quality_summary,
         "Run_Metadata": _clean_powerbi_columns(run_metadata),
         "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
         "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
@@ -2140,33 +2224,38 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Scenario_Comparison": scenario_comparison,
         "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
         "Machine_Grouping": machine_grouping,
+        "PowerBI_Table_Dictionary": powerbi_table_dictionary,
+        "Export_Mode_Dictionary": export_mode_dictionary,
+        "Required_Files": required_files_table,
+        "Testing_Checklist": testing_checklist_table,
+        "Update_Process": update_process_table,
     }
     preview = build_powerbi_export_preview(provisional_tables, list(provisional_tables.keys()))
     readiness = build_powerbi_readiness_score(preview)
     provisional_tables["PowerBI_Readiness"] = pd.concat([readiness.assign(Section="Score"), preview.assign(Section="Table Check")], ignore_index=True, sort=False)
 
     tables = {
-        "Fact_RebuildRows": fact_rebuild,
-        "Fact_ValidRows": fact_valid_rebuild,
+        "Fact_Rebuild_Rows": fact_rebuild,
+        "Fact_Valid_Rebuild_Rows": fact_valid_rebuild,
         "Dim_Machine": dim_machine,
         "Dim_Dealer": dim_dealer,
-        "Dim_RebuildType": dim_rebuild_type,
+        "Dim_Rebuild_Type": dim_rebuild_type,
         "Dim_Region": dim_region,
-        "Dim_Date": dim_date,
-        "Fact_ExceptionRows": fact_exceptions,
-        "Fact_OutlierRows": fact_outliers,
-        "Fact_CrossTypeFlags": fact_cross_flags,
-        "Fact_GlobalCCRTypeAvg": global_ccr_type_avg,
-        "Fact_RegionCCRTypeAvg": region_ccr_type_avg,
-        "Fact_MachineCCRTypeAvg": machine_ccr_type_avg,
-        "Fact_MachineGroupCCRTypeAvg": machine_group_ccr_type_avg,
-        "Fact_MachineInsights": machine_insights_export,
-        "Fact_MachineSummary": fact_machine_summary,
-        "Fact_DealerPerf": fact_dealer_performance,
-        "Fact_RegionPerf": fact_region_performance,
-        "Fact_RateCoverage": fact_rate_coverage,
-        "Fact_DataQuality": fact_data_quality,
-        "DataQualitySummary": data_quality_summary,
+        "Dim_Service_Year": dim_date,
+        "Fact_Exception_Rows": fact_exceptions,
+        "Fact_Outlier_Rows": fact_outliers,
+        "Fact_CrossType_Flags": fact_cross_flags,
+        "Fact_Global_RebuildType_AvgCost": global_ccr_type_avg,
+        "Fact_Region_RebuildType_AvgCost": region_ccr_type_avg,
+        "Fact_Machine_RebuildType_AvgCost": machine_ccr_type_avg,
+        "Fact_MachineGroup_RebuildType_AvgCost": machine_group_ccr_type_avg,
+        "Fact_Machine_Insights": machine_insights_export,
+        "Fact_Machine_Ranking": fact_machine_summary,
+        "Fact_Dealer_Performance": fact_dealer_performance,
+        "Fact_Region_Performance": fact_region_performance,
+        "Fact_Rate_Coverage": fact_rate_coverage,
+        "Fact_Data_Quality": fact_data_quality,
+        "DataQuality_Summary": data_quality_summary,
         "Run_Metadata": _clean_powerbi_columns(run_metadata),
         "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
         "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
@@ -2178,6 +2267,11 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Scenario_Comparison": scenario_comparison,
         "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
         "Machine_Grouping": machine_grouping,
+        "PowerBI_Table_Dictionary": powerbi_table_dictionary,
+        "Export_Mode_Dictionary": export_mode_dictionary,
+        "Required_Files": required_files_table,
+        "Testing_Checklist": testing_checklist_table,
+        "Update_Process": update_process_table,
         "PowerBI_Readiness": provisional_tables["PowerBI_Readiness"],
     }
     return {name: table for name, table in tables.items() if table is not None and isinstance(table, pd.DataFrame)}
@@ -2237,6 +2331,11 @@ def build_scenario_archive_package(analysis, scenario_name_value, export_reason_
         build_scenario_comparison_table(analysis, scenario_name_value=scenario_name_value).to_excel(writer, sheet_name="Scenario Comparison", index=False)
         build_powerbi_instructions_table().to_excel(writer, sheet_name="PowerBI Instructions", index=False)
         build_powerbi_report_layout_table().to_excel(writer, sheet_name="PowerBI Layout", index=False)
+        build_powerbi_table_dictionary().to_excel(writer, sheet_name="PBI Table Dictionary", index=False)
+        build_export_mode_dictionary().to_excel(writer, sheet_name="Export Modes", index=False)
+        build_required_files_checklist().to_excel(writer, sheet_name="Required Files", index=False)
+        build_testing_checklist().to_excel(writer, sheet_name="Testing Checklist", index=False)
+        build_update_process_table().to_excel(writer, sheet_name="Update Process", index=False)
         analysis.get("data_dictionary", pd.DataFrame()).to_excel(writer, sheet_name="Data Dictionary", index=False)
         analysis.get("known_limitations", pd.DataFrame()).to_excel(writer, sheet_name="Known Limitations", index=False)
         apply_excel_brand_formatting(writer.book)
@@ -2803,7 +2902,7 @@ if st.session_state.run_clicked and rebuild_file:
         display_table(selected_machine_ccr, currency_cols=["Avg_Cost", "Machine CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Machine CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
         if not selected_machine_ccr.empty:
             cat_rebuild_type_bar_chart(selected_machine_ccr, value_col="Avg_Cost")
-        st.write("### Region Breakdown by Rebuild Type")
+        st.write("### Region Breakdown by Rebuild Type (Shown Once for Selected Machine)")
         selected_machine_region_adjusted = dfm[~((dfm["CCR TYPE"] == "CPT+H") & (dfm["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
         selected_machine_region_ccr = build_combined_region_ccr_type_summary(dfm, selected_machine_region_adjusted, cost_col, global_ccr_type_summary)
         if selected_machine_region_ccr.empty:
@@ -3003,20 +3102,36 @@ if st.session_state.run_clicked and rebuild_file:
 **V16.5 update:** Refines rebuild-type charts so CMR, CPT+H Standard, CPT+H Adjusted, and CPT-O appear as separate sections; adds machine-group average cost by rebuild type; and places separate region-by-rebuild-type charts directly below the machine rebuild-type chart.""")
 
     with tab10:
-        st.subheader("Governance & Data Dictionary")
+        st.subheader("Governance & Dictionary")
+        st.markdown("""
+This section is intended for handoff, auditability, and future maintenance. It explains the meaning of key fields, export tables, roles, required files, testing expectations, and safe update process.
+""")
         st.write("### Known Limitations")
         display_table(known_limitations)
         st.write("### Data Dictionary")
         display_table(data_dictionary)
+        st.write("### Power BI Table Dictionary")
+        display_table(build_powerbi_table_dictionary())
+        st.write("### Export Mode Dictionary")
+        display_table(build_export_mode_dictionary())
         st.write("### Role-Based Export Design")
         display_table(role_policy)
+        st.write("### Required Files Checklist")
+        display_table(build_required_files_checklist())
+        st.write("### Testing Checklist")
+        display_table(build_testing_checklist())
+        st.write("### Safe Update Process")
+        display_table(build_update_process_table())
         st.write("### Saved Parameter Summary")
         display_table(parameter_summary)
         st.write("### Performance Safeguards")
         display_table(performance_safeguards)
 
     with tab11:
-        st.subheader("Configured Rebuild Types and Regions")
+        st.subheader("Reference")
+        st.markdown("""
+Use this section to audit supported rebuild types, configured regions, observed values in the current run, machine grouping, dealer-rate source, and Power BI export references.
+""")
         st.write("### Certified Rebuild Types")
         st.dataframe(rebuild_reference, use_container_width=True)
         st.write("### Configured Regions")
@@ -3025,6 +3140,18 @@ if st.session_state.run_clicked and rebuild_file:
         st.dataframe(pd.DataFrame({"Observed CCR TYPE": sorted(valid["CCR TYPE"].dropna().unique())}), use_container_width=True)
         st.write("### Observed Regions in Current Run")
         st.dataframe(pd.DataFrame({"Observed Region": sorted(valid["Region"].dropna().unique())}), use_container_width=True)
+        st.write("### Machine Grouping Reference")
+        display_table(machine_grouping_lookup)
+        st.write("### Dealer Labor Rate Source Reference")
+        display_table(pd.DataFrame({"Reference Item": ["Dealer Rate Mode", "Dealer Rate Format", "Fallback Behavior", "Dealer Rate Rows", "Unique Dealers"], "Value": ["Built-in Expanded Dealer Rates" if use_default else "Uploaded Custom Dealer Rates", rate_file_mode, effective_fallback_behavior, len(rate_df), rate_df["Dealer Code"].nunique() if not rate_df.empty else 0]}))
+        st.write("### CPI / Inflation Reference")
+        display_table(pd.DataFrame({"Year": list(cpi_table.keys()), "CPI": list(cpi_table.values())}).sort_values("Year"), year_cols=["Year"], decimal_cols=["CPI"])
+        st.write("### FX Reference")
+        display_table(fx_lookup, year_cols=["Service Year"], decimal_cols=["FX to USD"])
+        st.write("### Power BI Export Table Reference")
+        display_table(build_powerbi_table_dictionary())
+        st.write("### App Version Reference")
+        display_table(pd.DataFrame({"Item": ["App Version", "Methodology Version", "Outlier Rule Version", "Dealer Rate Version", "Security Control Version", "Export Format Version"], "Value": [APP_VERSION, METHODOLOGY_VERSION, OUTLIER_RULE_VERSION, DEALER_RATE_VERSION, SECURITY_CONTROL_VERSION, EXPORT_FORMAT_VERSION]}))
 
     output = BytesIO()
     export_metadata = pd.concat([
@@ -3111,6 +3238,11 @@ if st.session_state.run_clicked and rebuild_file:
                 region_reference.to_excel(writer, sheet_name="Region Reference", index=False)
                 known_limitations.to_excel(writer, sheet_name="Known Limitations", index=False)
                 data_dictionary.to_excel(writer, sheet_name="Data Dictionary", index=False)
+                build_powerbi_table_dictionary().to_excel(writer, sheet_name="PBI Table Dictionary", index=False)
+                build_export_mode_dictionary().to_excel(writer, sheet_name="Export Modes", index=False)
+                build_required_files_checklist().to_excel(writer, sheet_name="Required Files", index=False)
+                build_testing_checklist().to_excel(writer, sheet_name="Testing Checklist", index=False)
+                build_update_process_table().to_excel(writer, sheet_name="Update Process", index=False)
                 role_policy.to_excel(writer, sheet_name="Role Design", index=False)
                 for machine in valid["SALES MODEL"].dropna().unique():
                     valid[valid["SALES MODEL"] == machine].to_excel(writer, sheet_name=safe_sheet_name(machine), index=False)
