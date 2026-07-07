@@ -14,13 +14,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.2.1"
+APP_VERSION = "V16.2.2"
 APP_LAST_UPDATED = "2026-06-30"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Confidential Yellow Phase 1"
-EXPORT_FORMAT_VERSION = "V16.2.1 Power BI Export Header Fix"
+EXPORT_FORMAT_VERSION = "V16.2.2 Power BI Clean Header Export"
 CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -1522,15 +1522,19 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     additional_metadata = pd.DataFrame({
         "Field": [
             "Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format",
-            "Power BI Notes", "Confidentiality Label", "Generated Timestamp"
+            "Power BI Notes", "Generated Timestamp"
         ],
         "Value": [
-            run_id, scenario_label, export_mode_value, export_reason_value, "V16.2.1 Power BI Dataset Export",
-            "Clean flat tables; no watermark rows, merged cells, or decorative headers. Use Run ID to relate scenario-specific tables.",
-            CONFIDENTIALITY_LABEL, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            run_id, scenario_label, export_mode_value, export_reason_value, "V16.2.2 Power BI Dataset Export",
+            "Clean flat tables; no watermark rows, merged cells, decorative headers, or Confidential Yellow marker rows. Use Run ID to relate scenario-specific tables.",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ]
     })
     run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
+    if "Field" in run_metadata.columns:
+        run_metadata = run_metadata[~run_metadata["Field"].astype(str).str.contains("Confidentiality", case=False, na=False)].copy()
+    if "Value" in run_metadata.columns:
+        run_metadata = run_metadata[~run_metadata["Value"].astype(str).str.contains("Confidential Yellow", case=False, na=False)].copy()
 
     relationship_guide = pd.DataFrame({
         "From Table": [
@@ -1599,11 +1603,26 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     return {name: table for name, table in tables.items() if table is not None and isinstance(table, pd.DataFrame)}
 
 
+def _strip_powerbi_confidential_marker_rows(df):
+    """Remove any accidental Confidential Yellow marker rows before writing Power BI tables."""
+    out = _clean_powerbi_columns(df)
+    if out.empty:
+        return out
+    first_col = out.columns[0]
+    marker_mask = out[first_col].astype(str).str.contains("Confidential Yellow", case=False, na=False)
+    return out.loc[~marker_mask].copy()
+
+
 def write_powerbi_dataset_workbook(writer, analysis, scenario_name_value, export_reason_value, export_mode_value):
     tables = build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_value, export_mode_value)
     for sheet_name, table in tables.items():
         safe_name = safe_sheet_name(sheet_name)
-        _clean_powerbi_columns(table).to_excel(writer, sheet_name=safe_name, index=False)
+        clean_table = _strip_powerbi_confidential_marker_rows(table)
+        # Explicit startrow=0 ensures row 1 is always the actual column header row for Power BI.
+        clean_table.to_excel(writer, sheet_name=safe_name, index=False, startrow=0)
+        ws = writer.book[safe_name]
+        # Freeze on row 2 for convenience only; no inserted rows, merged cells, or watermarking.
+        ws.freeze_panes = "A2"
 
 # =====================================================
 # MAIN UI INPUTS
@@ -2226,7 +2245,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.2.1 fix:** Power BI Dataset Export now writes only clean Power BI tables with column headers on row 1. It does not add Cover Page rows, Confidential Yellow watermarks, merged cells, or decorative workbook formatting to Power BI export sheets.""")
+**V16.2.2 fix:** Power BI Dataset Export now completely suppresses Confidential Yellow watermark rows and writes column headers directly on row 1 for every Power BI sheet. Normal Excel review exports still keep Confidential Yellow workbook markings.""")
 
     with tab9:
         st.subheader("Governance & Data Dictionary")
@@ -2268,12 +2287,13 @@ if st.session_state.run_clicked and rebuild_file:
         user_role_view_value=user_role_view,
         strict_mode_value=strict_mode,
     )
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        if export_mode == "Power BI Dataset Export":
-            # Power BI mode intentionally writes ONLY clean flat tables.
-            # No coverpage/prewritten governance sheets, no watermark row, no merged cells, and no decorative formatting.
+    if export_mode == "Power BI Dataset Export":
+        # Dedicated clean Power BI writer. Do not write cover page, watermark rows, merged cells,
+        # decorative formatting, or normal review-workbook tabs before the dataset tables.
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             write_powerbi_dataset_workbook(writer, analysis, scenario_name, export_reason_final, export_mode)
-        else:
+    else:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             cover_sheet.to_excel(writer, sheet_name="Cover Page", index=False)
             export_metadata.to_excel(writer, sheet_name="Run Metadata", index=False)
             run_readiness_summary.to_excel(writer, sheet_name="Run Readiness", index=False)
