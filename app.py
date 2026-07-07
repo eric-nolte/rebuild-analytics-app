@@ -14,13 +14,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V16.1.1"
+APP_VERSION = "V16.2"
 APP_LAST_UPDATED = "2026-06-30"
 METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
 OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Confidential Yellow Phase 1"
-EXPORT_FORMAT_VERSION = "V16.1.1 Governance Stability Patch"
+EXPORT_FORMAT_VERSION = "V16.2 Power BI Dataset Export"
 CONFIDENTIALITY_LABEL = "Caterpillar: Confidential Yellow"
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -1327,6 +1327,284 @@ def build_machine_export(selected_machine, analysis):
     output.seek(0)
     return output.getvalue()
 
+
+# =====================================================
+# POWER BI DATASET EXPORT HELPERS - V16.2
+# =====================================================
+def _clean_powerbi_columns(df):
+    """Return a clean copy with Power BI-friendly column names and data types preserved."""
+    if df is None or not isinstance(df, pd.DataFrame):
+        return pd.DataFrame()
+    out = df.copy()
+    # Power BI handles spaces, but removing line breaks and repeated whitespace makes the model cleaner.
+    out.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in out.columns]
+    return out
+
+
+def _add_run_columns(df, run_id, scenario_name_value):
+    out = _clean_powerbi_columns(df)
+    if out.empty:
+        return out
+    if "Run ID" not in out.columns:
+        out.insert(0, "Run ID", run_id)
+    if "Scenario Name" not in out.columns:
+        out.insert(1, "Scenario Name", scenario_name_value if scenario_name_value else "Not provided")
+    return out
+
+
+def _percent_from_counts(numerator, denominator):
+    try:
+        denominator = float(denominator)
+        if denominator == 0:
+            return np.nan
+        return float(numerator) / denominator * 100
+    except Exception:
+        return np.nan
+
+
+def build_powerbi_exception_rows(processed_df, cost_col, run_id, scenario_name_value):
+    """Create one clean exception table for Power BI visuals."""
+    rows = []
+    if processed_df is None or processed_df.empty:
+        return pd.DataFrame(columns=["Run ID", "Scenario Name", "SALES MODEL", "DEALER", "Dealer Code", "Region", "CCR TYPE", "Service Year", "Exception Type", "Exception Detail", "Cost", "SMU AT REBUILD"])
+
+    base_cols = ["SALES MODEL", "DEALER", "Dealer Code", "Region", "CCR TYPE", "Service Year", "SMU AT REBUILD"]
+    for _, r in processed_df.iterrows():
+        base = {col: r.get(col, np.nan) for col in base_cols}
+        base["Cost"] = r.get(cost_col, np.nan)
+        if bool(r.get("Outlier", False)):
+            rec = base.copy()
+            rec["Exception Type"] = "Cost Outlier"
+            rec["Exception Detail"] = r.get("Outlier Reason", "Cost outlier")
+            rows.append(rec)
+        if str(r.get("Cross-Type Exception Flag", "")).strip():
+            rec = base.copy()
+            rec["Exception Type"] = "Cross-Type Exception"
+            rec["Exception Detail"] = r.get("Cross-Type Exception Flag", "")
+            rows.append(rec)
+        if str(r.get("Data Quality Exception Flag", "")).strip():
+            rec = base.copy()
+            rec["Exception Type"] = "Data Quality"
+            rec["Exception Detail"] = r.get("Data Quality Exception Flag", "")
+            rows.append(rec)
+        if bool(r.get("Insufficient Sample Group", False)):
+            rec = base.copy()
+            rec["Exception Type"] = "Insufficient Sample"
+            rec["Exception Detail"] = "Machine + CCR TYPE group has fewer than 5 records"
+            rows.append(rec)
+        if str(r.get("Dealer Rate Exception Flag", "")).strip():
+            rec = base.copy()
+            rec["Exception Type"] = "Dealer Rate Exception"
+            rec["Exception Detail"] = r.get("Dealer Rate Exception Flag", "")
+            rows.append(rec)
+        if str(r.get("FX Source", "")).strip() == "Embedded fallback FX table":
+            rec = base.copy()
+            rec["Exception Type"] = "FX Fallback"
+            rec["Exception Detail"] = "Embedded fallback FX table used"
+            rows.append(rec)
+
+    out = pd.DataFrame(rows)
+    return _add_run_columns(out, run_id, scenario_name_value)
+
+
+def build_powerbi_dealer_performance(valid_df, processed_df, cost_col, run_id, scenario_name_value):
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame()
+    group_cols = ["SALES MODEL", "Dealer Code", "DEALER", "Region"]
+    valid_cols = [c for c in group_cols if c in valid_df.columns]
+    proc_cols = [c for c in group_cols if c in processed_df.columns]
+    perf = valid_df.groupby(valid_cols, dropna=False).agg(
+        Avg_Cost=(cost_col, "mean"),
+        Avg_SMU=("SMU AT REBUILD", "mean"),
+        Count=(cost_col, "count"),
+        Cross_Type_Flags=("Cross-Type Exception Flag", lambda x: (x.astype(str).str.strip() != "").sum()),
+        Dealer_Rate_Exception_Rows=("Dealer Rate Exception Flag", lambda x: (x.astype(str).str.strip() != "").sum()),
+        Data_Quality_Rows=("Data Quality Exception Flag", lambda x: (x.astype(str).str.strip() != "").sum()),
+    ).reset_index()
+    full = processed_df.groupby(proc_cols, dropna=False).agg(
+        Total_Rows=(cost_col, "count"),
+        Outlier_Rows=("Outlier", "sum"),
+    ).reset_index()
+    out = perf.merge(full, on=valid_cols, how="left")
+    out["Outlier Rate %"] = out.apply(lambda r: _percent_from_counts(r.get("Outlier_Rows", 0), r.get("Total_Rows", 0)), axis=1)
+    out["Cross Flag Rate %"] = out.apply(lambda r: _percent_from_counts(r.get("Cross_Type_Flags", 0), r.get("Count", 0)), axis=1)
+    out["Dealer Rate Exception Rate %"] = out.apply(lambda r: _percent_from_counts(r.get("Dealer_Rate_Exception_Rows", 0), r.get("Count", 0)), axis=1)
+    out["Data Quality Rate %"] = out.apply(lambda r: _percent_from_counts(r.get("Data_Quality_Rows", 0), r.get("Count", 0)), axis=1)
+    section_avg = out["Avg_Cost"].mean()
+    out["Vs Overall Avg %"] = ((out["Avg_Cost"] - section_avg) / section_avg * 100) if section_avg else np.nan
+    out["Performance Score"] = (
+        100
+        - out["Vs Overall Avg %"].clip(lower=0).fillna(0) * 0.50
+        - out["Outlier Rate %"].fillna(0) * 0.30
+        - out["Cross Flag Rate %"].fillna(0) * 0.20
+        - out["Dealer Rate Exception Rate %"].fillna(0) * 0.20
+        - out["Data Quality Rate %"].fillna(0) * 0.20
+    ).clip(lower=0, upper=100).round(1)
+    out["Performance Label"] = np.where(out["Performance Score"] >= 85, "Strong", np.where(out["Performance Score"] >= 70, "Monitor", "Review Needed"))
+    return _add_run_columns(out, run_id, scenario_name_value)
+
+
+def build_powerbi_region_performance(valid_df, processed_df, cost_col, run_id, scenario_name_value):
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame()
+    group_cols = ["SALES MODEL", "Region"]
+    perf = valid_df.groupby(group_cols, dropna=False).agg(
+        Avg_Cost=(cost_col, "mean"),
+        Avg_SMU=("SMU AT REBUILD", "mean"),
+        Count=(cost_col, "count"),
+        Cross_Type_Flags=("Cross-Type Exception Flag", lambda x: (x.astype(str).str.strip() != "").sum()),
+        Data_Quality_Rows=("Data Quality Exception Flag", lambda x: (x.astype(str).str.strip() != "").sum()),
+    ).reset_index()
+    full = processed_df.groupby(group_cols, dropna=False).agg(
+        Total_Rows=(cost_col, "count"),
+        Outlier_Rows=("Outlier", "sum"),
+    ).reset_index()
+    out = perf.merge(full, on=group_cols, how="left")
+    out["Outlier Rate %"] = out.apply(lambda r: _percent_from_counts(r.get("Outlier_Rows", 0), r.get("Total_Rows", 0)), axis=1)
+    overall = out["Avg_Cost"].mean()
+    out["Vs Overall Avg %"] = ((out["Avg_Cost"] - overall) / overall * 100) if overall else np.nan
+    return _add_run_columns(out, run_id, scenario_name_value)
+
+
+def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_value, export_mode_value):
+    """Build clean, flat Power BI-ready fact/dimension tables.
+
+    This export intentionally avoids watermarks, merged cells, visual headers, and decorative formatting.
+    Confidentiality and methodology values are included as fields in metadata tables instead.
+    """
+    processed_df = analysis["df"].copy()
+    valid_df = analysis["valid"].copy()
+    adjusted_valid = analysis.get("adjusted_valid", pd.DataFrame()).copy()
+    cost_col = analysis["cost_col"]
+    run_id = datetime.now().strftime("RUN_%Y%m%d_%H%M%S")
+    scenario_label = scenario_name_value if scenario_name_value else "Not provided"
+
+    fact_rebuild = _add_run_columns(processed_df, run_id, scenario_label)
+    fact_valid_rebuild = _add_run_columns(valid_df, run_id, scenario_label)
+
+    dim_machine = pd.DataFrame({"SALES MODEL": sorted(processed_df["SALES MODEL"].dropna().unique())}) if "SALES MODEL" in processed_df.columns else pd.DataFrame()
+    if not dim_machine.empty:
+        dim_machine["Machine Family"] = dim_machine["SALES MODEL"].astype(str).str.extract(r"(\d+)")[0].fillna(dim_machine["SALES MODEL"].astype(str))
+        dim_machine = _add_run_columns(dim_machine, run_id, scenario_label)
+
+    dealer_cols = [c for c in ["Dealer Code", "DEALER", "Region"] if c in processed_df.columns]
+    dim_dealer = processed_df[dealer_cols].drop_duplicates().sort_values(dealer_cols).reset_index(drop=True) if dealer_cols else pd.DataFrame()
+    dim_dealer = _add_run_columns(dim_dealer, run_id, scenario_label)
+
+    dim_rebuild_type = analysis.get("rebuild_reference", pd.DataFrame()).rename(columns={"Description": "Rebuild Description"})
+    dim_rebuild_type = _add_run_columns(dim_rebuild_type, run_id, scenario_label)
+
+    dim_region = analysis.get("region_reference", pd.DataFrame()).rename(columns={"Configured Region": "Region"})
+    if not dim_region.empty:
+        dim_region["Configured Region Flag"] = True
+    dim_region = _add_run_columns(dim_region, run_id, scenario_label)
+
+    years = sorted(processed_df["Service Year"].dropna().astype(int).unique()) if "Service Year" in processed_df.columns else []
+    dim_date = pd.DataFrame({"Service Year": years})
+    if not dim_date.empty:
+        dim_date["Year"] = dim_date["Service Year"]
+        dim_date["Year Label"] = dim_date["Service Year"].astype(str)
+    dim_date = _add_run_columns(dim_date, run_id, scenario_label)
+
+    fact_exceptions = build_powerbi_exception_rows(processed_df, cost_col, run_id, scenario_label)
+    fact_outliers = _add_run_columns(processed_df[processed_df["Outlier"] == True].copy(), run_id, scenario_label) if "Outlier" in processed_df.columns else pd.DataFrame()
+    fact_cross_flags = _add_run_columns(valid_df[valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != ""].copy(), run_id, scenario_label) if "Cross-Type Exception Flag" in valid_df.columns else pd.DataFrame()
+
+    fact_machine_summary = _add_run_columns(analysis.get("machine_benchmark_ranking", pd.DataFrame()).copy(), run_id, scenario_label)
+    fact_dealer_performance = build_powerbi_dealer_performance(valid_df, processed_df, cost_col, run_id, scenario_label)
+    fact_region_performance = build_powerbi_region_performance(valid_df, processed_df, cost_col, run_id, scenario_label)
+
+    fact_rate_coverage = _add_run_columns(analysis.get("dealer_rate_coverage_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    fact_data_quality = _add_run_columns(analysis.get("data_quality_score_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    data_quality_summary = _add_run_columns(analysis.get("data_quality_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+
+    run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
+    additional_metadata = pd.DataFrame({
+        "Field": [
+            "Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format",
+            "Power BI Notes", "Confidentiality Label", "Generated Timestamp"
+        ],
+        "Value": [
+            run_id, scenario_label, export_mode_value, export_reason_value, "V16.2 Power BI Dataset Export",
+            "Clean flat tables; no watermark rows, merged cells, or decorative headers. Use Run ID to relate scenario-specific tables.",
+            CONFIDENTIALITY_LABEL, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ]
+    })
+    run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
+
+    relationship_guide = pd.DataFrame({
+        "From Table": [
+            "Fact_RebuildRows", "Fact_RebuildRows", "Fact_RebuildRows", "Fact_RebuildRows", "Fact_RebuildRows",
+            "Fact_MachineSummary", "Fact_DealerPerformance", "Fact_RegionPerformance", "Fact_ExceptionRows"
+        ],
+        "From Column": [
+            "SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year",
+            "SALES MODEL", "Dealer Code", "Region", "SALES MODEL"
+        ],
+        "To Table": [
+            "Dim_Machine", "Dim_Dealer", "Dim_RebuildType", "Dim_Region", "Dim_Date",
+            "Dim_Machine", "Dim_Dealer", "Dim_Region", "Dim_Machine"
+        ],
+        "To Column": [
+            "SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year",
+            "SALES MODEL", "Dealer Code", "Region", "SALES MODEL"
+        ],
+        "Relationship Notes": [
+            "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested",
+            "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested"
+        ]
+    })
+
+    dax_starter = pd.DataFrame({
+        "Measure Name": [
+            "Average Cost", "Valid Rows", "Total Rows", "Outlier Rows", "Outlier Rate %",
+            "Cross-Type Flags", "Dealer Rate Exceptions", "Average SMU"
+        ],
+        "DAX Expression": [
+            f"Average Cost = AVERAGE(Fact_RebuildRows[{cost_col}])",
+            "Valid Rows = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Outlier] = FALSE())",
+            "Total Rows = COUNTROWS(Fact_RebuildRows)",
+            "Outlier Rows = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Outlier] = TRUE())",
+            "Outlier Rate % = DIVIDE([Outlier Rows], [Total Rows])",
+            "Cross-Type Flags = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Cross-Type Exception Flag] <> \"\")",
+            "Dealer Rate Exceptions = CALCULATE(COUNTROWS(Fact_RebuildRows), Fact_RebuildRows[Dealer Rate Exception Flag] <> \"\")",
+            "Average SMU = AVERAGE(Fact_RebuildRows[SMU AT REBUILD])",
+        ]
+    })
+
+    tables = {
+        "Fact_RebuildRows": fact_rebuild,
+        "Fact_ValidRows": fact_valid_rebuild,
+        "Dim_Machine": dim_machine,
+        "Dim_Dealer": dim_dealer,
+        "Dim_RebuildType": dim_rebuild_type,
+        "Dim_Region": dim_region,
+        "Dim_Date": dim_date,
+        "Fact_ExceptionRows": fact_exceptions,
+        "Fact_OutlierRows": fact_outliers,
+        "Fact_CrossTypeFlags": fact_cross_flags,
+        "Fact_MachineSummary": fact_machine_summary,
+        "Fact_DealerPerf": fact_dealer_performance,
+        "Fact_RegionPerf": fact_region_performance,
+        "Fact_RateCoverage": fact_rate_coverage,
+        "Fact_DataQuality": fact_data_quality,
+        "DataQualitySummary": data_quality_summary,
+        "Run_Metadata": _clean_powerbi_columns(run_metadata),
+        "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
+        "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
+        "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
+        "Relationship_Guide": relationship_guide,
+        "DAX_Starter": dax_starter,
+    }
+    return {name: table for name, table in tables.items() if table is not None and isinstance(table, pd.DataFrame)}
+
+
+def write_powerbi_dataset_workbook(writer, analysis, scenario_name_value, export_reason_value, export_mode_value):
+    tables = build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_value, export_mode_value)
+    for sheet_name, table in tables.items():
+        safe_name = safe_sheet_name(sheet_name)
+        _clean_powerbi_columns(table).to_excel(writer, sheet_name=safe_name, index=False)
+
 # =====================================================
 # MAIN UI INPUTS
 # =====================================================
@@ -1427,7 +1705,7 @@ with st.expander("Advanced Threshold Configuration", expanded=False):
     max_rows_warning_threshold = st.number_input("Large-run row warning threshold", min_value=1000, max_value=250000, value=DEFAULT_MAX_ROWS_WARNING, step=1000)
 
 st.subheader("Export Controls")
-export_mode = st.selectbox("Full workbook export mode", ["Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit"], index=0)
+export_mode = st.selectbox("Full workbook export mode", ["Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Power BI Dataset Export"], index=0)
 export_reason = st.selectbox("Export reason", ["Manager review", "Dealer review", "Cost benchmarking", "Data validation", "Presentation support", "Other"], index=0)
 export_reason_other = ""
 if export_reason == "Other":
@@ -1939,7 +2217,7 @@ if st.session_state.run_clicked and rebuild_file:
         7. Review Exceptions & Data Quality before sharing results.
         8. If needed, manually change advanced thresholds; defaults preserve the standard methodology.
         9. Use Strict Mode only for formal review where the configured thresholds should stop weak runs.
-        10. Choose the least-detailed export mode and provide an export reason.
+        10. Choose the least-detailed export mode and provide an export reason. Use Power BI Dataset Export when building Power BI reports.
         11. Interpret Excel highlights: red = cost outlier, orange = cross-type exception, yellow = insufficient sample group.
         """)
 
@@ -1948,7 +2226,7 @@ if st.session_state.run_clicked and rebuild_file:
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.1.1 stability patch:** Fixes scope-safe workbook watermarking, removes duplicate template watermarking, applies export watermarks reliably, adds built-in rate workbook availability warning, and keeps V16.1 governance/future-proofing controls.""")
+**V16.2 addition:** Adds a Power BI Dataset Export mode with clean fact, dimension, exception, metadata, relationship-guide, and DAX-starter tables. This mode is designed for Power BI import and intentionally avoids decorative workbook rows.""")
 
     with tab9:
         st.subheader("Governance & Data Dictionary")
@@ -1998,7 +2276,9 @@ if st.session_state.run_clicked and rebuild_file:
         data_quality_score_summary.to_excel(writer, sheet_name="Data Quality Score", index=False)
         parameter_summary.to_excel(writer, sheet_name="Parameters", index=False)
         performance_safeguards.to_excel(writer, sheet_name="Performance Checks", index=False)
-        if export_mode == "Summary Only":
+        if export_mode == "Power BI Dataset Export":
+            write_powerbi_dataset_workbook(writer, analysis, scenario_name, export_reason_final, export_mode)
+        elif export_mode == "Summary Only":
             summary.to_excel(writer, sheet_name="Summary", index=False)
             if show_adjusted_cpth:
                 adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
@@ -2044,14 +2324,17 @@ if st.session_state.run_clicked and rebuild_file:
             role_policy.to_excel(writer, sheet_name="Role Design", index=False)
             for machine in valid["SALES MODEL"].dropna().unique():
                 valid[valid["SALES MODEL"] == machine].to_excel(writer, sheet_name=safe_sheet_name(machine), index=False)
-        apply_excel_brand_formatting(writer.book)
-        apply_confidential_watermark(writer.book, scenario_name)
+        if export_mode != "Power BI Dataset Export":
+            apply_excel_brand_formatting(writer.book)
+            apply_confidential_watermark(writer.book, scenario_name)
     if render_export_acknowledgement("full_export_ack"):
         safe_scenario = re.sub(r"[^A-Za-z0-9_-]+", "_", scenario_name.strip()) if scenario_name else "Scenario"
-        st.download_button("Download Workbook", data=output.getvalue(), file_name=f"Rebuild_Analysis_{safe_scenario}_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
+        download_label = "Download Power BI Dataset Workbook" if export_mode == "Power BI Dataset Export" else "Download Workbook"
+        export_prefix = "Rebuild_Analysis_PowerBI_Dataset" if export_mode == "Power BI Dataset Export" else "Rebuild_Analysis"
+        st.download_button(download_label, data=output.getvalue(), file_name=f"{export_prefix}_{safe_scenario}_{export_mode.replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
     else:
         st.info("Confirm export authorization to enable the full workbook download.")
-    st.markdown("""<div class="cat-footer"><strong>Rebuild Analytics Platform</strong> | Caterpillar: Confidential Yellow | Internal analytics tool | Cost, inflation, dealer, region, outlier, cross-type exception, governance, and performance-safeguard reporting</div>""", unsafe_allow_html=True)
+    st.markdown("""<div class="cat-footer"><strong>Rebuild Analytics Platform</strong> | Caterpillar: Confidential Yellow | Internal analytics tool | Cost, inflation, dealer, region, outlier, cross-type exception, governance, performance-safeguard, and Power BI dataset reporting</div>""", unsafe_allow_html=True)
 else:
     st.info("Upload file and run analysis")
 
