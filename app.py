@@ -15,21 +15,42 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V17.1"
-APP_LAST_UPDATED = "2026-07-07"
-METHODOLOGY_VERSION = "2026.06-Cost-IQR-v2"
-OUTLIER_RULE_VERSION = "Cost Log-IQR by Machine + CCR TYPE"
+APP_VERSION = "V18.0"
+APP_LAST_UPDATED = "2026-07-08"
+METHODOLOGY_VERSION = "2026.07-PowerBI-CrossType-Outlier-v18"
+OUTLIER_RULE_VERSION = "Cost Log-IQR + CPT+H Cross-Type Outlier by Machine"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V17.1 Template Instruction Upgrade"
+EXPORT_FORMAT_VERSION = "V18.0 Power BI Core Export & Cross-Type Outlier Methodology"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
-DEFAULT_POWERBI_TABLES_STANDARD = ["Fact_Rebuild_Rows", "Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year", "Fact_Global_RebuildType_AvgCost", "Fact_Region_RebuildType_AvgCost", "Fact_Machine_RebuildType_AvgCost", "Fact_MachineGroup_RebuildType_AvgCost", "Fact_Machine_Insights", "Fact_Machine_Ranking", "Fact_Dealer_Performance", "Fact_Region_Performance", "Run_Metadata", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "Scenario_Comparison", "Filter_Summary"]
-DEFAULT_POWERBI_TABLES_DETAILED = DEFAULT_POWERBI_TABLES_STANDARD + ["Fact_Exception_Rows", "Fact_Outlier_Rows", "Fact_CrossType_Flags", "Fact_Rate_Coverage", "Fact_Data_Quality", "PowerBI_Readiness"]
-DEFAULT_POWERBI_TABLES_FULL_AUDIT = DEFAULT_POWERBI_TABLES_DETAILED + ["Fact_Valid_Rebuild_Rows", "DataQuality_Summary", "Parameters", "Data_Dictionary", "Known_Limitations", "Machine_Grouping", "PowerBI_Table_Dictionary", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
-POWERBI_TABLE_OPTIONS = list(dict.fromkeys(DEFAULT_POWERBI_TABLES_FULL_AUDIT))
-POWERBI_PRESET_MAP = {"Standard": DEFAULT_POWERBI_TABLES_STANDARD, "Detailed": DEFAULT_POWERBI_TABLES_DETAILED, "Full Audit": DEFAULT_POWERBI_TABLES_FULL_AUDIT}
+POWERBI_FULL_EXPORT_TABLES = [
+    "Fact_Rebuild_Rows", "Fact_Valid_Rebuild_Rows",
+    "Fact_Global_RebuildType_AvgCost", "Fact_Region_RebuildType_AvgCost",
+    "Fact_Machine_RebuildType_AvgCost", "Fact_MachineGroup_RebuildType_AvgCost",
+    "Fact_MachineRegion_RebuildType_AvgCost", "Fact_Machine_Insights",
+    "Fact_Machine_Ranking", "Fact_Dealer_Performance", "Fact_Region_Performance",
+    "Fact_Exception_Rows", "Fact_Outlier_Rows", "Fact_CrossType_Outliers",
+    "Fact_Rate_Coverage", "Fact_Data_Quality", "DataQuality_Summary",
+    "Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
+    "Machine_Grouping", "Run_Metadata", "Filter_Summary", "Relationship_Guide", "DAX_Starter",
+    "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary",
+    "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process",
+    "Known_Limitations", "Data_Dictionary", "Parameters", "PowerBI_Readiness"
+]
+DEFAULT_POWERBI_TABLES_STANDARD = POWERBI_FULL_EXPORT_TABLES
+DEFAULT_POWERBI_TABLES_DETAILED = POWERBI_FULL_EXPORT_TABLES
+DEFAULT_POWERBI_TABLES_FULL_AUDIT = POWERBI_FULL_EXPORT_TABLES
+POWERBI_TABLE_OPTIONS = POWERBI_FULL_EXPORT_TABLES
+POWERBI_PRESET_MAP = {"Full Detailed": POWERBI_FULL_EXPORT_TABLES}
+POWERBI_SHEET_NAME_MAP = {
+    "Fact_Machine_RebuildType_AvgCost": "Fact_Machine_RT_AvgCost",
+    "Fact_MachineGroup_RebuildType_AvgCost": "Fact_MachGroup_RT_AvgCost",
+    "Fact_MachineRegion_RebuildType_AvgCost": "Fact_MachRegion_RT_AvgCost",
+    "Fact_Global_RebuildType_AvgCost": "Fact_Global_RT_AvgCost",
+    "Fact_Region_RebuildType_AvgCost": "Fact_Region_RT_AvgCost",
+}
 
 st.set_page_config(layout="wide", page_title="Rebuild Analytics Platform")
 
@@ -161,8 +182,8 @@ METHOD_LOCK_TEXT = """
 - **Outliers:** Cost-only log(cost) + IQR by Machine + CCR TYPE.
 - **Sample-size rules:** <5 = no removal; 5–7 = 2.0×IQR; 8+ = 1.5×IQR.
 - **SMU:** SMU 0 or 1 is a data-quality flag only; SMU is not used as a statistical outlier basis.
-- **Cross-type review:** CPT+H rows are flagged when above machine-level valid CMR median × 1.10, only when at least 3 valid CMR rows exist.
-- **Adjusted CPT+H:** Adjusted averages exclude cross-type flagged CPT+H rows only; CMR and CPT-O remain unchanged.
+- **Cross-type outliers:** CPT+H rows above machine-level valid CMR median × 1.10 are treated as outliers/excluded rows, only when at least 3 valid CMR rows exist.
+- **CPT+H reporting:** There is one reported CPT+H value. Statistical cost outliers and cross-type CPT+H outliers are excluded from core averages and exported for audit.
 - **V16.1 controls:** Strict Mode and configurable thresholds are optional governance controls; defaults preserve the locked methodology unless manually changed.
 """
 
@@ -213,20 +234,14 @@ def cat_bar_chart(data, x, y, color=None, tooltip=None, height=360):
 # =====================================================
 CCR_DISPLAY_BASE_ORDER = {
     "CMR": 1,
-    "CPT+H - Standard": 2,
-    "CPT+H - Adjusted": 3,
-    "CPT-O": 4,
+    "CPT+H": 2,
+    "CPT-O": 3,
 }
-COST_VIEW_SCALE = alt.Scale(domain=["Standard", "Adjusted"], range=["#000000", "#FFC500"])
+COST_VIEW_SCALE = alt.Scale(domain=["Reported"], range=["#FFC500"])
 
 
-def ccr_display_label(ccr_type, cost_view):
+def ccr_display_label(ccr_type, cost_view=None):
     ccr = str(ccr_type).strip()
-    view = str(cost_view).strip()
-    if ccr == "CPT+H" and view == "Adjusted":
-        return "CPT+H - Adjusted"
-    if ccr == "CPT+H":
-        return "CPT+H - Standard"
     return ccr
 
 
@@ -241,11 +256,11 @@ def add_ccr_display_columns(df):
     out = df.copy()
     if out.empty:
         return out
-    if "Cost View" not in out.columns:
-        out["Cost View"] = "Standard"
-    out["CCR Display"] = out.apply(lambda r: ccr_display_label(r.get("CCR TYPE", ""), r.get("Cost View", "Standard")), axis=1)
+    if "Cost View" in out.columns:
+        out = out.drop(columns=["Cost View"])
+    out["CCR Display"] = out.apply(lambda r: ccr_display_label(r.get("CCR TYPE", "")), axis=1)
     out["CCR Display Order"] = out["CCR Display"].apply(ccr_display_order)
-    return out.sort_values([c for c in ["CCR Display Order", "CCR Display", "Cost View"] if c in out.columns])
+    return out.sort_values([c for c in ["CCR Display Order", "CCR Display"] if c in out.columns])
 
 
 def cat_rebuild_type_bar_chart(data, value_col="Avg_Cost", height=360):
@@ -263,8 +278,8 @@ def cat_rebuild_type_bar_chart(data, value_col="Avg_Cost", height=360):
             x=alt.X("CCR Display:N", title="Rebuild Type", sort=sort_values,
                     axis=alt.Axis(labelAngle=-25, labelColor="#1F1F1F", titleColor="#1F1F1F")),
             y=alt.Y("Average Cost:Q", title="Average Cost", axis=alt.Axis(format="$,.0f", labelColor="#1F1F1F", titleColor="#1F1F1F", gridColor="#E6E6E6")),
-            color=alt.Color("Cost View:N", scale=COST_VIEW_SCALE, legend=alt.Legend(title="Cost View")),
-            tooltip=["CCR Display", "CCR TYPE", "Cost View", alt.Tooltip("Average Cost:Q", format="$,.0f"), "Count"],
+            color=alt.Color("CCR Display:N", scale=CAT_COLOR_SCALE, legend=None),
+            tooltip=["CCR Display", "CCR TYPE", alt.Tooltip("Average Cost:Q", format="$,.0f"), "Count"],
         )
         .properties(height=height)
         .configure_view(stroke="#D9D9D9")
@@ -574,7 +589,7 @@ def build_executive_narrative(valid_df, summary_df, cost_col, outlier_count, cro
         pass
     lines.append(f"Cost outliers excluded from core averages: {outlier_count:,}.")
     lines.append(f"CPT+H cross-type review flags: {cross_count:,}.")
-    lines.append("Adjusted CPT+H comparison is shown because both CMR and CPT+H records are present." if show_adjusted else "Adjusted CPT+H comparison is hidden because both CMR and CPT+H records are required.")
+    lines.append("Cross-type CPT+H outliers are treated as outliers and excluded from reported CPT+H averages." if show_adjusted else "Cross-type CPT+H outliers are treated as outliers and exported for audit.")
     return lines
 
 
@@ -599,7 +614,7 @@ def build_cover_sheet(metadata, readiness, dq_score, rate_cov, export_mode="Full
 def build_known_limitations_table():
     return pd.DataFrame({
         "Known Limitation": [
-            "Adjusted CPT+H dependency",
+            "Cross-Type Outlier Dependency",
             "Dealer code dependency",
             "Labor-hour dependency",
             "SMU handling",
@@ -610,7 +625,7 @@ def build_known_limitations_table():
             "Security scope",
         ],
         "Details": [
-            "Adjusted CPT+H outputs require both CMR and CPT+H records in the relevant scope.",
+            "Cross-type outlier detection requires enough valid CMR records in the relevant machine scope.",
             "Dealer labor-rate matching depends on detecting a valid four-character dealer code from the DEALER field.",
             "Rows with missing REBUILD WORK HRS cannot be used for adjusted labor-cost analysis.",
             "SMU values of 0 or 1 are data-quality flags only; SMU is not used for statistical outlier removal.",
@@ -929,7 +944,7 @@ def build_powerbi_instructions_table():
         "Instruction": [
             "Open Power BI Desktop and select Get Data > Excel Workbook.",
             "Choose the Power BI Dataset Export workbook from this app.",
-            "Select the Fact and Dim tables you included in the export.",
+            "Load the full detailed Power BI export tables. Table selection presets have been removed for consistency.",
             "Use Relationship_Guide to create suggested relationships.",
             "Use DAX_Starter for optional starter measures.",
             "Use Scenario_Comparison when appending multiple run exports.",
@@ -938,7 +953,7 @@ def build_powerbi_instructions_table():
         "Notes": [
             "Use Power BI Dataset Export, not formatted review workbooks.",
             "Each sheet is designed with headers in row 1.",
-            "Fact_Rebuild_Rows is the primary table.",
+            "Fact_Rebuild_Rows is the primary row-level table; Fact_MachineRegion_RebuildType_AvgCost supports machine-filtered region visuals.",
             "Most relationships are many-to-one from Fact tables to Dim tables.",
             "Review measure names and cost column before publishing.",
             "Run ID can support comparing multiple scenarios later.",
@@ -952,7 +967,7 @@ def build_powerbi_report_layout_table():
         "Page": ["Executive Overview", "Machine Detail", "Machine Group View", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Scenario Comparison"],
         "Visual": ["Cards + rebuild-type bar charts", "Slicers + rebuild-type chart + region charts", "Grouped rebuild-type chart", "Ranked bar/matrix", "Separate region rebuild-type charts", "Tables + count by type", "Trend/table"],
         "Primary Table": ["Fact_Global_RebuildType_AvgCost", "Fact_Machine_RebuildType_AvgCost", "Fact_MachineGroup_RebuildType_AvgCost", "Fact_Dealer_Performance", "Fact_Region_RebuildType_AvgCost", "Fact_Exception_Rows", "Scenario_Comparison"],
-        "Suggested Fields": ["CCR Display, Cost View, Avg_Cost, Count", "SALES MODEL, CCR Display, Avg_Cost, Region", "Machine Group, CCR Display, Avg_Cost", "Dealer Code, DEALER, Avg_Cost, Performance Label", "Region, CCR Display, Avg_Cost, Vs Regional CMR %", "Exception Type, Exception Detail, Cost", "Run ID, Scenario Name, Avg Cost, Outlier Rate %"],
+        "Suggested Fields": ["CCR Display, Avg_Cost, Count", "SALES MODEL, CCR Display, Avg_Cost, Region", "Machine Group, CCR Display, Avg_Cost", "Dealer Code, DEALER, Avg_Cost, Performance Label", "Region, CCR Display, Avg_Cost, Vs Regional CMR %", "Exception Type, Exception Detail, Cost", "Run ID, Scenario Name, Avg Cost, Outlier Rate %"],
         "Purpose": ["High-level rebuild-type cost summary", "Analyze a selected machine/model", "Compare machine families by rebuild type", "Compare dealer cost performance", "Compare regional cost performance by rebuild type", "Review rows requiring attention", "Compare multiple exported scenarios"],
     })
 
@@ -961,24 +976,25 @@ def build_powerbi_report_layout_table():
 def build_powerbi_table_dictionary():
     """Business-friendly dictionary for every Power BI export table."""
     return pd.DataFrame([
-        {"Table Name": "Fact_Rebuild_Rows", "Purpose": "Primary processed rebuild row table, including costs, flags, dealer rates, CPI, FX, and source attributes.", "Typical Power BI Use": "Main fact table for slicers, row-level tables, cost measures, and exception filtering.", "Key Fields": "Run ID, SALES MODEL, Machine Group, Dealer Code, Region, CCR TYPE, Cost View fields, cost columns, Outlier, Cross-Type Exception Flag"},
+        {"Table Name": "Fact_Rebuild_Rows", "Purpose": "Primary processed rebuild row table, including costs, flags, dealer rates, CPI, FX, and source attributes.", "Typical Power BI Use": "Main fact table for slicers, row-level tables, cost measures, and exception filtering.", "Key Fields": "Run ID, SALES MODEL, Machine Group, Dealer Code, Region, CCR TYPE, cost columns, Outlier, Cross-Type Exception Flag"},
         {"Table Name": "Fact_Valid_Rebuild_Rows", "Purpose": "Non-outlier processed rebuild rows used in core average calculations.", "Typical Power BI Use": "Use when visuals should match the app's core valid averages exactly.", "Key Fields": "Run ID, SALES MODEL, Region, CCR TYPE, cost columns, SMU AT REBUILD"},
         {"Table Name": "Dim_Machine", "Purpose": "Machine model and machine grouping lookup.", "Typical Power BI Use": "Machine slicers, grouping hierarchy, and model-level filtering.", "Key Fields": "SALES MODEL, Machine Group, Machine Family, Machine Category"},
         {"Table Name": "Dim_Dealer", "Purpose": "Dealer and region lookup table.", "Typical Power BI Use": "Dealer slicers and dealer-level performance pages.", "Key Fields": "Dealer Code, DEALER, Region"},
         {"Table Name": "Dim_Rebuild_Type", "Purpose": "Certified rebuild type reference table.", "Typical Power BI Use": "Rebuild type slicers and lookup descriptions.", "Key Fields": "CCR TYPE, Rebuild Description"},
         {"Table Name": "Dim_Region", "Purpose": "Configured region reference table.", "Typical Power BI Use": "Region slicers and region-level charts.", "Key Fields": "Region, Configured Region Flag"},
         {"Table Name": "Dim_Service_Year", "Purpose": "Service year dimension.", "Typical Power BI Use": "Year slicers and trend visuals.", "Key Fields": "Service Year, Year, Year Label"},
-        {"Table Name": "Fact_Global_RebuildType_AvgCost", "Purpose": "Global average cost by rebuild type, with CPT+H Standard and CPT+H Adjusted kept together.", "Typical Power BI Use": "Executive rebuild-type average cost bar charts.", "Key Fields": "CCR Display, CCR TYPE, Cost View, Avg_Cost, Count"},
+        {"Table Name": "Fact_Global_RebuildType_AvgCost", "Purpose": "Global average cost by rebuild type, with one reported CPT+H value after statistical and cross-type outlier exclusions.", "Typical Power BI Use": "Executive rebuild-type average cost bar charts.", "Key Fields": "CCR Display, CCR TYPE, Avg_Cost, Count"},
         {"Table Name": "Fact_Region_RebuildType_AvgCost", "Purpose": "Average cost by region and rebuild type, including regional CMR and global rebuild-type comparison fields.", "Typical Power BI Use": "Separate region charts and regional matrix views.", "Key Fields": "Region, CCR Display, Avg_Cost, Vs Regional CMR %, Vs Global CCR Avg %"},
-        {"Table Name": "Fact_Machine_RebuildType_AvgCost", "Purpose": "Average cost by machine and rebuild type, including adjusted CPT+H rows.", "Typical Power BI Use": "Machine detail charts and rebuild-type drill-through pages.", "Key Fields": "SALES MODEL, CCR Display, Avg_Cost, Vs Machine CMR %, Count"},
+        {"Table Name": "Fact_Machine_RebuildType_AvgCost", "Purpose": "Average cost by machine and rebuild type, with cross-type CPT+H outliers excluded from reported averages.", "Typical Power BI Use": "Machine detail charts and rebuild-type drill-through pages.", "Key Fields": "SALES MODEL, CCR Display, Avg_Cost, Vs Machine CMR %, Count"},
         {"Table Name": "Fact_MachineGroup_RebuildType_AvgCost", "Purpose": "Average cost by machine group/family and rebuild type, not just total average cost.", "Typical Power BI Use": "Machine family/group comparison charts.", "Key Fields": "Machine Group, Machine Family, CCR Display, Avg_Cost, Count"},
+        {"Table Name": "Fact_MachineRegion_RebuildType_AvgCost", "Purpose": "Average cost by machine, region, and rebuild type so region visuals respond to machine slicers.", "Typical Power BI Use": "Machine detail region charts and region drill-through pages.", "Key Fields": "SALES MODEL, Region, CCR Display, Avg_Cost, Count, Total Outliers Excluded"},
         {"Table Name": "Fact_Machine_Insights", "Purpose": "Machine-level narrative insights in table form.", "Typical Power BI Use": "Machine insight cards/tables and drill-through notes.", "Key Fields": "SALES MODEL, Insight Category, Insight Text, Metric Name, Metric Value, Priority"},
         {"Table Name": "Fact_Machine_Ranking", "Purpose": "Machine ranking and priority scoring output.", "Typical Power BI Use": "Executive ranking tables and priority-score visuals.", "Key Fields": "SALES MODEL, Avg_Cost, Priority Score, Priority Label"},
         {"Table Name": "Fact_Dealer_Performance", "Purpose": "Dealer-level performance scoring and cost position metrics.", "Typical Power BI Use": "Dealer scorecards and review-needed dealer lists.", "Key Fields": "Dealer Code, DEALER, Avg_Cost, Performance Score, Performance Label"},
         {"Table Name": "Fact_Region_Performance", "Purpose": "Region-level performance summary.", "Typical Power BI Use": "Region scorecards and regional summary pages.", "Key Fields": "Region, Avg_Cost, Count, Outlier Rate %, Vs Overall Avg %"},
         {"Table Name": "Fact_Exception_Rows", "Purpose": "Unified exception table for outliers, cross-type flags, data-quality flags, dealer-rate exceptions, and FX fallback rows.", "Typical Power BI Use": "Exception review page and drill-through table.", "Key Fields": "Exception Type, Exception Detail, SALES MODEL, Region, Cost"},
         {"Table Name": "Fact_Outlier_Rows", "Purpose": "Only rows flagged as cost outliers.", "Typical Power BI Use": "Outlier audit page.", "Key Fields": "SALES MODEL, CCR TYPE, Outlier Reason, cost columns"},
-        {"Table Name": "Fact_CrossType_Flags", "Purpose": "CPT+H rows flagged above the machine-level CMR benchmark.", "Typical Power BI Use": "Cross-type exception page.", "Key Fields": "SALES MODEL, CCR TYPE, CMR Benchmark Cost, Cross-Type Exception Flag"},
+        {"Table Name": "Fact_CrossType_Outliers", "Purpose": "CPT+H rows above the machine-level CMR benchmark and excluded from core averages.", "Typical Power BI Use": "Cross-type outlier audit page.", "Key Fields": "SALES MODEL, CCR TYPE, CMR Benchmark Cost, Cross-Type Exception Flag"},
         {"Table Name": "Fact_Rate_Coverage", "Purpose": "Dealer labor-rate coverage and fallback summary.", "Typical Power BI Use": "Rate governance scorecard.", "Key Fields": "Metric, Value"},
         {"Table Name": "Fact_Data_Quality", "Purpose": "Data quality score and supporting data-quality metrics.", "Typical Power BI Use": "Data quality scorecard.", "Key Fields": "Metric, Value"},
         {"Table Name": "Run_Metadata", "Purpose": "Run settings, methodology version, selected filters, and export context.", "Typical Power BI Use": "Report footer, tooltips, and audit pages.", "Key Fields": "Field, Value"},
@@ -1016,7 +1032,7 @@ def build_testing_checklist():
         {"Test": "Machine-grouping template download", "Expected Result": "Template downloads and opens with Instructions, Example, and User Input sheets."},
         {"Test": "Rebuild workbook upload", "Expected Result": "Pre-run validation profile appears."},
         {"Test": "Run Analysis", "Expected Result": "Dashboard, Machine Detail, Dealer, Region, and Insights tabs populate."},
-        {"Test": "Machine Detail chart", "Expected Result": "Chart shows CMR, CPT+H - Standard, CPT+H - Adjusted, and CPT-O as separate sections when present."},
+        {"Test": "Machine Detail chart", "Expected Result": "Chart shows one reported CMR, CPT+H, and CPT-O value when present; cross-type CPT+H outliers are excluded and auditable."},
         {"Test": "Machine Detail region breakdown", "Expected Result": "Region breakdown appears once, directly below the machine rebuild-type chart."},
         {"Test": "Power BI export", "Expected Result": "Power BI workbook sheets have headers on row 1 and no marker/watermark rows."},
         {"Test": "Power BI readiness", "Expected Result": "Selected tables show Ready or explain Needs Review / Not Ready."},
@@ -1047,7 +1063,7 @@ def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
         Count=(cost_col, "count"),
     ).reset_index()
     standard["Cost View"] = "Standard"
-    standard["Cross-Type Flags Removed"] = 0
+    standard["Cross-Type Outliers Excluded"] = 0
     rows.append(standard)
     if adjusted_valid_df is not None and not adjusted_valid_df.empty and "CPT+H" in set(valid_df["CCR TYPE"].astype(str)):
         adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
@@ -1059,7 +1075,7 @@ def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
             ).reset_index()
             adj["Cost View"] = "Adjusted"
             removed = int(((valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")).sum()) if "Cross-Type Exception Flag" in valid_df.columns else 0
-            adj["Cross-Type Flags Removed"] = removed
+            adj["Cross-Type Outliers Excluded"] = removed
             rows.append(adj)
     out = pd.concat(rows, ignore_index=True, sort=False)
     out["Sample Confidence"] = out["Count"].apply(sample_confidence)
@@ -1074,7 +1090,7 @@ def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
     out["_view_sort"] = out["Cost View"].map({"Standard": 1, "Adjusted": 2}).fillna(9)
     out = out.sort_values(["_sort", "_view_sort", "CCR TYPE"]).drop(columns=["_sort", "_view_sort"])
     out = add_ccr_display_columns(out)
-    return out[["Scope", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Vs CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]]
+    return out[["Scope", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Vs CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Outliers Excluded"]]
 
 
 def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
@@ -1088,7 +1104,7 @@ def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
         Count=(cost_col, "count"),
     ).reset_index()
     standard["Cost View"] = "Standard"
-    standard["Cross-Type Flags Removed"] = 0
+    standard["Cross-Type Outliers Excluded"] = 0
     rows.append(standard)
     if adjusted_valid_df is not None and not adjusted_valid_df.empty:
         adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
@@ -1103,7 +1119,7 @@ def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
                 removed = valid_df[(valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")].groupby("Region").size().to_dict()
             else:
                 removed = {}
-            adj["Cross-Type Flags Removed"] = adj["Region"].map(removed).fillna(0).astype(int)
+            adj["Cross-Type Outliers Excluded"] = adj["Region"].map(removed).fillna(0).astype(int)
             rows.append(adj)
     out = pd.concat(rows, ignore_index=True, sort=False)
     out["Sample Confidence"] = out["Count"].apply(sample_confidence)
@@ -1116,7 +1132,7 @@ def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
     out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
     out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
     out = add_ccr_display_columns(out)
-    return out[["Region", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Regional CMR Avg Cost", "Vs Regional CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]].sort_values(["Region", "CCR Display Order", "Cost View"])
+    return out[["Region", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Regional CMR Avg Cost", "Vs Regional CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Outliers Excluded"]].sort_values(["Region", "CCR Display Order", "Cost View"])
 
 
 def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
@@ -1131,7 +1147,7 @@ def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_co
         Count=(cost_col, "count"),
     ).reset_index()
     standard["Cost View"] = "Standard"
-    standard["Cross-Type Flags Removed"] = 0
+    standard["Cross-Type Outliers Excluded"] = 0
     rows.append(standard)
     if adjusted_valid_df is not None and not adjusted_valid_df.empty:
         adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
@@ -1147,7 +1163,7 @@ def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_co
                 removed = valid_df[(valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")].groupby("SALES MODEL").size().to_dict()
             else:
                 removed = {}
-            adj["Cross-Type Flags Removed"] = adj["SALES MODEL"].map(removed).fillna(0).astype(int)
+            adj["Cross-Type Outliers Excluded"] = adj["SALES MODEL"].map(removed).fillna(0).astype(int)
             rows.append(adj)
     out = pd.concat(rows, ignore_index=True, sort=False)
     out["Sample Confidence"] = out["Count"].apply(sample_confidence)
@@ -1160,7 +1176,7 @@ def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_co
     out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
     out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
     out = add_ccr_display_columns(out)
-    desired = ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Machine CMR Avg Cost", "Vs Machine CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]
+    desired = ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Machine CMR Avg Cost", "Vs Machine CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Outliers Excluded"]
     return out[[c for c in desired if c in out.columns]].sort_values(["SALES MODEL", "CCR Display Order", "Cost View"])
 
 
@@ -1179,7 +1195,7 @@ def build_combined_machine_group_ccr_type_summary(valid_df, adjusted_valid_df, c
         Count=(cost_col, "count"),
     ).reset_index()
     standard["Cost View"] = "Standard"
-    standard["Cross-Type Flags Removed"] = 0
+    standard["Cross-Type Outliers Excluded"] = 0
     rows.append(standard)
     if adjusted_valid_df is not None and not adjusted_valid_df.empty:
         adj_cpth = adjusted_valid_df[adjusted_valid_df["CCR TYPE"] == "CPT+H"].copy()
@@ -1195,7 +1211,7 @@ def build_combined_machine_group_ccr_type_summary(valid_df, adjusted_valid_df, c
                 removed = valid_df[(valid_df["CCR TYPE"] == "CPT+H") & (valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != "")].groupby("Machine Group").size().to_dict()
             else:
                 removed = {}
-            adj["Cross-Type Flags Removed"] = adj["Machine Group"].map(removed).fillna(0).astype(int)
+            adj["Cross-Type Outliers Excluded"] = adj["Machine Group"].map(removed).fillna(0).astype(int)
             rows.append(adj)
     out = pd.concat(rows, ignore_index=True, sort=False)
     out["Sample Confidence"] = out["Count"].apply(sample_confidence)
@@ -1208,7 +1224,7 @@ def build_combined_machine_group_ccr_type_summary(valid_df, adjusted_valid_df, c
     out["Global CCR Avg Cost"] = out.apply(lambda r: lookup.get((r["CCR TYPE"], r["Cost View"]), np.nan), axis=1)
     out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
     out = add_ccr_display_columns(out)
-    wanted = ["Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Group CMR Avg Cost", "Vs Group CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Flags Removed"]
+    wanted = ["Machine Group", "Machine Family", "Machine Category", "CCR TYPE", "Cost View", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", "Group CMR Avg Cost", "Vs Group CMR %", "Global CCR Avg Cost", "Vs Global CCR Avg %", "Cross-Type Outliers Excluded"]
     return out[[c for c in wanted if c in out.columns]].sort_values(["Machine Group", "CCR Display Order", "Cost View"])
 
 def build_machine_insights_table(valid_df, processed_df, machine_ccr_summary, cost_col):
@@ -1237,8 +1253,136 @@ def build_machine_insights_table(valid_df, processed_df, machine_ccr_summary, co
             std_val = std_cpth["Avg_Cost"].iloc[0]
             adj_val = adj_cpth["Avg_Cost"].iloc[0]
             diff_pct = (adj_val - std_val) / std_val * 100 if std_val else np.nan
-            removed = int(adj_cpth["Cross-Type Flags Removed"].iloc[0]) if "Cross-Type Flags Removed" in adj_cpth.columns else 0
+            removed = int(adj_cpth["Cross-Type Outliers Excluded"].iloc[0]) if "Cross-Type Outliers Excluded" in adj_cpth.columns else 0
             rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Adjusted CPT+H", "Insight Text": f"{machine} standard CPT+H is {money(std_val)}; adjusted CPT+H is {money(adj_val)} after removing {removed:,} flagged row(s), a {diff_pct:.1f}% change.", "Metric Name": "Adjusted CPT+H Difference %", "Metric Value": diff_pct, "Priority": "Info" if removed == 0 else "Review"})
+        if "Region" in mvalid.columns:
+            reg = mvalid.groupby("Region")[cost_col].mean().sort_values(ascending=False)
+            if len(reg) > 0:
+                rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Highest Region", "Insight Text": f"Highest average region for {machine} is {reg.index[0]} at {money(reg.iloc[0])}.", "Metric Name": "Highest Region Avg Cost", "Metric Value": reg.iloc[0], "Priority": "Info"})
+    return pd.DataFrame(rows)
+
+
+# =====================================================
+# V18 POWER BI-FIRST SUMMARY / OUTLIER HELPERS
+# =====================================================
+def _build_outlier_counts(processed_df, group_cols):
+    cols = list(group_cols) if group_cols else []
+    if processed_df is None or processed_df.empty:
+        return pd.DataFrame(columns=cols + ["Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"])
+    temp = processed_df.copy()
+    for flag in ["Statistical Cost Outlier Flag", "Cross-Type Outlier Flag", "Outlier"]:
+        if flag not in temp.columns:
+            temp[flag] = False
+    if cols:
+        out = temp.groupby(cols, dropna=False).agg(
+            Statistical_Outliers_Excluded=("Statistical Cost Outlier Flag", "sum"),
+            Cross_Type_Outliers_Excluded=("Cross-Type Outlier Flag", "sum"),
+            Total_Outliers_Excluded=("Outlier", "sum"),
+        ).reset_index()
+    else:
+        out = pd.DataFrame({
+            "Statistical_Outliers_Excluded": [int(temp["Statistical Cost Outlier Flag"].sum())],
+            "Cross_Type_Outliers_Excluded": [int(temp["Cross-Type Outlier Flag"].sum())],
+            "Total_Outliers_Excluded": [int(temp["Outlier"].sum())],
+        })
+    return out.rename(columns={"Statistical_Outliers_Excluded": "Statistical Outliers Excluded", "Cross_Type_Outliers_Excluded": "Cross-Type Outliers Excluded", "Total_Outliers_Excluded": "Total Outliers Excluded"})
+
+
+def build_rebuild_type_avg_summary(valid_df, processed_df, cost_col, group_cols=None, cmr_label="CMR Avg Cost", vs_label="Vs CMR %"):
+    group_cols = group_cols or []
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame(columns=group_cols + ["CCR TYPE", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence", cmr_label, vs_label, "Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"])
+    grouping = group_cols + ["CCR TYPE"]
+    out = valid_df.groupby(grouping, dropna=False).agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count")).reset_index()
+    out["Sample Confidence"] = out["Count"].apply(sample_confidence)
+    out = add_ccr_display_columns(out)
+    if group_cols:
+        cmr_map = out[out["CCR TYPE"] == "CMR"].set_index(group_cols)["Avg_Cost"].to_dict()
+        out[cmr_label] = out.apply(lambda r: cmr_map.get(tuple(r[c] for c in group_cols), np.nan), axis=1)
+    else:
+        cmr_rows = out[out["CCR TYPE"] == "CMR"]
+        cmr_val = cmr_rows["Avg_Cost"].iloc[0] if not cmr_rows.empty else np.nan
+        out[cmr_label] = cmr_val
+    out[vs_label] = np.where(out[cmr_label].notna() & (out[cmr_label] != 0), (out["Avg_Cost"] - out[cmr_label]) / out[cmr_label] * 100, np.nan)
+    outlier_counts = _build_outlier_counts(processed_df, grouping)
+    if not outlier_counts.empty:
+        out = out.merge(outlier_counts, on=grouping, how="left")
+    for col in ["Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"]:
+        if col not in out.columns:
+            out[col] = 0
+        out[col] = out[col].fillna(0).astype(int)
+    return out.sort_values([c for c in group_cols + ["CCR Display Order", "CCR TYPE"] if c in out.columns])
+
+
+def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, processed_df=None):
+    processed_df = valid_df if processed_df is None else processed_df
+    out = build_rebuild_type_avg_summary(valid_df, processed_df, cost_col, group_cols=[], cmr_label="Global CMR Avg Cost", vs_label="Vs CMR %")
+    if not out.empty:
+        out.insert(0, "Scope", "Global")
+        out["Global CCR Avg Cost"] = out["Avg_Cost"]
+        out["Vs Global CCR Avg %"] = 0.0
+    return out
+
+
+def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None, processed_df=None):
+    processed_df = valid_df if processed_df is None else processed_df
+    out = build_rebuild_type_avg_summary(valid_df, processed_df, cost_col, group_cols=["Region"], cmr_label="Regional CMR Avg Cost", vs_label="Vs Regional CMR %")
+    if global_ccr_summary is not None and not global_ccr_summary.empty:
+        lookup = global_ccr_summary.set_index("CCR TYPE")["Avg_Cost"].to_dict()
+        out["Global CCR Avg Cost"] = out["CCR TYPE"].map(lookup)
+        out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
+    return out
+
+
+def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None, processed_df=None):
+    processed_df = valid_df if processed_df is None else processed_df
+    group_cols = [c for c in ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category"] if c in valid_df.columns]
+    out = build_rebuild_type_avg_summary(valid_df, processed_df, cost_col, group_cols=group_cols, cmr_label="Machine CMR Avg Cost", vs_label="Vs Machine CMR %")
+    if global_ccr_summary is not None and not global_ccr_summary.empty:
+        lookup = global_ccr_summary.set_index("CCR TYPE")["Avg_Cost"].to_dict()
+        out["Global CCR Avg Cost"] = out["CCR TYPE"].map(lookup)
+        out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
+    return out
+
+
+def build_combined_machine_group_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None, processed_df=None):
+    processed_df = valid_df if processed_df is None else processed_df
+    group_cols = [c for c in ["Machine Group", "Machine Family", "Machine Category"] if c in valid_df.columns]
+    out = build_rebuild_type_avg_summary(valid_df, processed_df, cost_col, group_cols=group_cols, cmr_label="Group CMR Avg Cost", vs_label="Vs Group CMR %")
+    if global_ccr_summary is not None and not global_ccr_summary.empty:
+        lookup = global_ccr_summary.set_index("CCR TYPE")["Avg_Cost"].to_dict()
+        out["Global CCR Avg Cost"] = out["CCR TYPE"].map(lookup)
+        out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
+    return out
+
+
+def build_machine_region_ccr_type_summary(valid_df, processed_df, cost_col, global_ccr_summary=None):
+    group_cols = [c for c in ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Region"] if c in valid_df.columns]
+    out = build_rebuild_type_avg_summary(valid_df, processed_df, cost_col, group_cols=group_cols, cmr_label="Machine Region CMR Avg Cost", vs_label="Vs Machine Region CMR %")
+    if global_ccr_summary is not None and not global_ccr_summary.empty:
+        lookup = global_ccr_summary.set_index("CCR TYPE")["Avg_Cost"].to_dict()
+        out["Global CCR Avg Cost"] = out["CCR TYPE"].map(lookup)
+        out["Vs Global CCR Avg %"] = np.where(out["Global CCR Avg Cost"].notna() & (out["Global CCR Avg Cost"] != 0), (out["Avg_Cost"] - out["Global CCR Avg Cost"]) / out["Global CCR Avg Cost"] * 100, np.nan)
+    return out
+
+
+def build_machine_insights_table(valid_df, processed_df, machine_ccr_summary, cost_col):
+    rows = []
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame(columns=["SALES MODEL", "Machine Group", "Insight Category", "Insight Text", "Metric Name", "Metric Value", "Priority"])
+    for machine, mvalid in valid_df.groupby("SALES MODEL", dropna=False):
+        mall = processed_df[processed_df["SALES MODEL"] == machine].copy() if processed_df is not None and not processed_df.empty else pd.DataFrame()
+        group = mvalid["Machine Group"].dropna().iloc[0] if "Machine Group" in mvalid.columns and not mvalid["Machine Group"].dropna().empty else "UNKNOWN"
+        avg_cost = mvalid[cost_col].mean()
+        rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Average Cost", "Insight Text": f"{machine} average analysis cost is {money(avg_cost)} across {len(mvalid):,} valid row(s) after excluding statistical and cross-type outliers.", "Metric Name": "Average Cost", "Metric Value": avg_cost, "Priority": "Info"})
+        ccr_rows = machine_ccr_summary[machine_ccr_summary["SALES MODEL"] == machine].copy() if machine_ccr_summary is not None and not machine_ccr_summary.empty else pd.DataFrame()
+        if not ccr_rows.empty:
+            top = ccr_rows.sort_values("Avg_Cost", ascending=False).iloc[0]
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Highest Rebuild Type", "Insight Text": f"Highest reported rebuild type cost for {machine} is {top['CCR TYPE']} at {money(top['Avg_Cost'])}.", "Metric Name": "Highest CCR Avg Cost", "Metric Value": top["Avg_Cost"], "Priority": "Info"})
+        stat_outliers = int(mall["Statistical Cost Outlier Flag"].sum()) if not mall.empty and "Statistical Cost Outlier Flag" in mall.columns else 0
+        cross_outliers = int(mall["Cross-Type Outlier Flag"].sum()) if not mall.empty and "Cross-Type Outlier Flag" in mall.columns else 0
+        if stat_outliers or cross_outliers:
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Excluded Outliers", "Insight Text": f"{machine} excludes {stat_outliers:,} statistical cost outlier row(s) and {cross_outliers:,} cross-type CPT+H outlier row(s) from core averages.", "Metric Name": "Total Excluded Outliers", "Metric Value": stat_outliers + cross_outliers, "Priority": "Review" if cross_outliers else "Info"})
         if "Region" in mvalid.columns:
             reg = mvalid.groupby("Region")[cost_col].mean().sort_values(ascending=False)
             if len(reg) > 0:
@@ -1918,7 +2062,7 @@ def build_machine_export(selected_machine, analysis):
     cpth_diff = adjusted_cpth - standard_cpth if pd.notna(adjusted_cpth) and pd.notna(standard_cpth) else np.nan
     cpth_diff_pct = (cpth_diff / standard_cpth) if pd.notna(cpth_diff) and standard_cpth else np.nan
     adjusted_comparison = pd.DataFrame({
-        "Metric": ["Standard CPT+H Avg", "Adjusted CPT+H Avg", "Difference $", "Difference %", "Cross-Type Flags Removed"],
+        "Metric": ["Standard CPT+H Avg", "Adjusted CPT+H Avg", "Difference $", "Difference %", "Cross-Type Outliers Excluded"],
         "Value": [standard_cpth, adjusted_cpth, cpth_diff, cpth_diff_pct, int(((machine_valid["CCR TYPE"] == "CPT+H") & (machine_valid["Cross-Type Exception Flag"] != "")).sum()) if not machine_valid.empty else 0]
     })
 
@@ -1926,7 +2070,7 @@ def build_machine_export(selected_machine, analysis):
     region_summary = region_performance_for_df(machine_valid, cost_col)
 
     exceptions_summary = pd.DataFrame({
-        "Metric": ["Cost Outliers", "CPT+H Cross-Type Flags", "SMU 0 or 1", "Insufficient Sample Rows", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate"],
+        "Metric": ["Cost Outliers", "CPT+H Cross-Type Outliers", "SMU 0 or 1", "Insufficient Sample Rows", "Rows Using Fallback FX", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate"],
         "Value": [
             int(machine_all["Outlier"].sum()) if "Outlier" in machine_all.columns else 0,
             int((machine_valid["Cross-Type Exception Flag"] != "").sum()) if "Cross-Type Exception Flag" in machine_valid.columns else 0,
@@ -1970,7 +2114,7 @@ def build_machine_export(selected_machine, analysis):
             "<5 rows: no removal; 5–7 rows: 2.0×IQR; 8+ rows: 1.5×IQR.",
             "SMU 0 or 1 is a data-quality flag only and is not a statistical outlier basis.",
             "CPT+H flagged when above machine-level valid CMR median × 1.10, if at least 3 valid CMR rows exist.",
-            "Adjusted CPT+H excludes cross-type flagged CPT+H rows only; CMR and CPT-O stay unchanged.",
+            "V18 treats cross-type CPT+H exceptions as outliers. The app reports one CPT+H value after exclusions and exports excluded rows for audit.",
             "Score subtracts weighted impacts from above-average cost, outlier rate, cross-type rate, and data-quality rate.",
         ]
     })
@@ -2143,14 +2287,9 @@ def build_powerbi_region_performance(valid_df, processed_df, cost_col, run_id, s
 
 
 def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_value, export_mode_value):
-    """Build clean, flat Power BI-ready fact/dimension tables.
-
-    This export intentionally avoids watermarks, merged cells, visual headers, and decorative formatting.
-    Confidentiality and methodology values are included as fields in metadata tables instead.
-    """
+    """Build the single full detailed Power BI export. Row 1 is always headers in the writer."""
     processed_df = analysis["df"].copy()
     valid_df = analysis["valid"].copy()
-    adjusted_valid = analysis.get("adjusted_valid", pd.DataFrame()).copy()
     cost_col = analysis["cost_col"]
     run_id = datetime.now().strftime("RUN_%Y%m%d_%H%M%S")
     scenario_label = scenario_name_value if scenario_name_value else "Not provided"
@@ -2183,12 +2322,11 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
 
     fact_exceptions = build_powerbi_exception_rows(processed_df, cost_col, run_id, scenario_label)
     fact_outliers = _add_run_columns(processed_df[processed_df["Outlier"] == True].copy(), run_id, scenario_label) if "Outlier" in processed_df.columns else pd.DataFrame()
-    fact_cross_flags = _add_run_columns(valid_df[valid_df["Cross-Type Exception Flag"].astype(str).str.strip() != ""].copy(), run_id, scenario_label) if "Cross-Type Exception Flag" in valid_df.columns else pd.DataFrame()
+    fact_cross_type_outliers = _add_run_columns(processed_df[processed_df.get("Cross-Type Outlier Flag", False) == True].copy(), run_id, scenario_label) if "Cross-Type Outlier Flag" in processed_df.columns else pd.DataFrame()
 
     fact_machine_summary = _add_run_columns(analysis.get("machine_benchmark_ranking", pd.DataFrame()).copy(), run_id, scenario_label)
     fact_dealer_performance = build_powerbi_dealer_performance(valid_df, processed_df, cost_col, run_id, scenario_label)
     fact_region_performance = build_powerbi_region_performance(valid_df, processed_df, cost_col, run_id, scenario_label)
-
     fact_rate_coverage = _add_run_columns(analysis.get("dealer_rate_coverage_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     fact_data_quality = _add_run_columns(analysis.get("data_quality_score_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     data_quality_summary = _add_run_columns(analysis.get("data_quality_summary", pd.DataFrame()).copy(), run_id, scenario_label)
@@ -2196,159 +2334,72 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     region_ccr_type_avg = _add_run_columns(analysis.get("region_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     machine_ccr_type_avg = _add_run_columns(analysis.get("machine_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     machine_group_ccr_type_avg = _add_run_columns(analysis.get("machine_group_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
+    machine_region_ccr_type_avg = _add_run_columns(analysis.get("machine_region_ccr_type_summary", pd.DataFrame()).copy(), run_id, scenario_label)
     machine_insights_export = _add_run_columns(analysis.get("machine_insights", pd.DataFrame()).copy(), run_id, scenario_label)
 
     run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
-    additional_metadata = pd.DataFrame({
-        "Field": [
-            "Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format",
-            "Power BI Notes", "Generated Timestamp"
-        ],
-        "Value": [
-            run_id, scenario_label, export_mode_value, export_reason_value, "V16.3 Power BI Dataset Export",
-            "Clean flat tables; no watermark rows, merged cells, decorative headers, or  marker rows. Use Run ID to relate scenario-specific tables.",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ]
-    })
+    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V18.0 Full Detailed Power BI Export", "Power BI is the primary output. All sheets are clean tables with headers on row 1. Long logical table names use shortened Excel sheet names where needed due to Excel sheet-name limits. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
     run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
-    if "Field" in run_metadata.columns:
-        run_metadata = run_metadata[~run_metadata["Field"].astype(str).str.contains("Confidential|Removed Label", case=False, na=False)].copy()
-    if "Value" in run_metadata.columns:
-        run_metadata = run_metadata[~run_metadata["Value"].astype(str).str.contains("Confidential|Yellow|Removed Label", case=False, na=False)].copy()
 
     relationship_guide = pd.DataFrame({
-        "From Table": [
-            "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows",
-            "Fact_Machine_Ranking", "Fact_DealerPerformance", "Fact_RegionPerformance", "Fact_Exception_Rows"
-        ],
-        "From Column": [
-            "SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year",
-            "SALES MODEL", "Dealer Code", "Region", "SALES MODEL"
-        ],
-        "To Table": [
-            "Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
-            "Dim_Machine", "Dim_Dealer", "Dim_Region", "Dim_Machine"
-        ],
-        "To Column": [
-            "SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year",
-            "SALES MODEL", "Dealer Code", "Region", "SALES MODEL"
-        ],
-        "Relationship Notes": [
-            "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested",
-            "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested", "Many-to-one suggested"
-        ]
+        "From Table": ["Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Machine_RebuildType_AvgCost", "Fact_MachineRegion_RebuildType_AvgCost", "Fact_MachineRegion_RebuildType_AvgCost", "Fact_Dealer_Performance", "Fact_Region_Performance", "Fact_Exception_Rows", "Fact_CrossType_Outliers"],
+        "From Column": ["SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year", "SALES MODEL", "SALES MODEL", "Region", "Dealer Code", "Region", "SALES MODEL", "SALES MODEL"],
+        "To Table": ["Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year", "Dim_Machine", "Dim_Machine", "Dim_Region", "Dim_Dealer", "Dim_Region", "Dim_Machine", "Dim_Machine"],
+        "To Column": ["SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year", "SALES MODEL", "SALES MODEL", "Region", "Dealer Code", "Region", "SALES MODEL", "SALES MODEL"],
+        "Cardinality": ["Many-to-one (*:1)"] * 12,
+        "Cross Filter Direction": ["Single"] * 12,
+        "Active": ["Yes"] * 12,
+        "Relationship Notes": ["Dimension filters fact; keep single direction."] * 12,
     })
-
-    dax_starter = pd.DataFrame({
-        "Measure Name": [
-            "Average Cost", "Valid Rows", "Total Rows", "Outlier Rows", "Outlier Rate %",
-            "Cross-Type Flags", "Dealer Rate Exceptions", "Average SMU"
-        ],
-        "DAX Expression": [
-            f"Average Cost = AVERAGE(Fact_Rebuild_Rows[{cost_col}])",
-            "Valid Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = FALSE())",
-            "Total Rows = COUNTROWS(Fact_Rebuild_Rows)",
-            "Outlier Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = TRUE())",
-            "Outlier Rate % = DIVIDE([Outlier Rows], [Total Rows])",
-            "Cross-Type Flags = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Cross-Type Exception Flag] <> \"\")",
-            "Dealer Rate Exceptions = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Dealer Rate Exception Flag] <> \"\")",
-            "Average SMU = AVERAGE(Fact_Rebuild_Rows[SMU AT REBUILD])",
-        ]
-    })
-
-    scenario_comparison = build_scenario_comparison_table(analysis, run_id, scenario_label)
-    powerbi_instructions = build_powerbi_instructions_table()
-    powerbi_report_layout = build_powerbi_report_layout_table()
-    machine_grouping = _add_run_columns(analysis.get("machine_grouping_lookup", pd.DataFrame()).copy(), run_id, scenario_label)
-    powerbi_table_dictionary = build_powerbi_table_dictionary()
-    export_mode_dictionary = build_export_mode_dictionary()
-    required_files_table = build_required_files_checklist()
-    testing_checklist_table = build_testing_checklist()
-    update_process_table = build_update_process_table()
-    provisional_tables = {
-        "Fact_Rebuild_Rows": fact_rebuild,
-        "Fact_Valid_Rebuild_Rows": fact_valid_rebuild,
-        "Dim_Machine": dim_machine,
-        "Dim_Dealer": dim_dealer,
-        "Dim_Rebuild_Type": dim_rebuild_type,
-        "Dim_Region": dim_region,
-        "Dim_Service_Year": dim_date,
-        "Fact_Exception_Rows": fact_exceptions,
-        "Fact_Outlier_Rows": fact_outliers,
-        "Fact_CrossType_Flags": fact_cross_flags,
-        "Fact_Global_RebuildType_AvgCost": global_ccr_type_avg,
-        "Fact_Region_RebuildType_AvgCost": region_ccr_type_avg,
-        "Fact_Machine_RebuildType_AvgCost": machine_ccr_type_avg,
-        "Fact_MachineGroup_RebuildType_AvgCost": machine_group_ccr_type_avg,
-        "Fact_Machine_Insights": machine_insights_export,
-        "Fact_Machine_Ranking": fact_machine_summary,
-        "Fact_Dealer_Performance": fact_dealer_performance,
-        "Fact_Region_Performance": fact_region_performance,
-        "Fact_Rate_Coverage": fact_rate_coverage,
-        "Fact_Data_Quality": fact_data_quality,
-        "DataQuality_Summary": data_quality_summary,
-        "Run_Metadata": _clean_powerbi_columns(run_metadata),
-        "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
-        "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
-        "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
-        "Relationship_Guide": relationship_guide,
-        "DAX_Starter": dax_starter,
-        "PowerBI_Instructions": powerbi_instructions,
-        "PowerBI_Report_Layout": powerbi_report_layout,
-        "Scenario_Comparison": scenario_comparison,
-        "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
-        "Machine_Grouping": machine_grouping,
-        "PowerBI_Table_Dictionary": powerbi_table_dictionary,
-        "Export_Mode_Dictionary": export_mode_dictionary,
-        "Required_Files": required_files_table,
-        "Testing_Checklist": testing_checklist_table,
-        "Update_Process": update_process_table,
-    }
-    preview = build_powerbi_export_preview(provisional_tables, list(provisional_tables.keys()))
-    readiness = build_powerbi_readiness_score(preview)
-    provisional_tables["PowerBI_Readiness"] = pd.concat([readiness.assign(Section="Score"), preview.assign(Section="Table Check")], ignore_index=True, sort=False)
+    dax_starter = pd.DataFrame({"Measure Name": ["Average Cost", "Valid Rows", "Total Rows", "Outlier Rows", "Outlier Rate %", "Cross-Type Outliers", "Dealer Rate Exceptions", "Average SMU"], "DAX Expression": [f"Average Cost = AVERAGE(Fact_Rebuild_Rows[{cost_col}])", "Valid Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = FALSE())", "Total Rows = COUNTROWS(Fact_Rebuild_Rows)", "Outlier Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = TRUE())", "Outlier Rate % = DIVIDE([Outlier Rows], [Total Rows])", "Cross-Type Outliers = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Cross-Type Outlier Flag] = TRUE())", "Dealer Rate Exceptions = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Dealer Rate Exception Flag] <> \"\")", "Average SMU = AVERAGE(Fact_Rebuild_Rows[SMU AT REBUILD])"]})
 
     tables = {
         "Fact_Rebuild_Rows": fact_rebuild,
         "Fact_Valid_Rebuild_Rows": fact_valid_rebuild,
+        "Fact_Global_RebuildType_AvgCost": global_ccr_type_avg,
+        "Fact_Region_RebuildType_AvgCost": region_ccr_type_avg,
+        "Fact_Machine_RebuildType_AvgCost": machine_ccr_type_avg,
+        "Fact_MachineGroup_RebuildType_AvgCost": machine_group_ccr_type_avg,
+        "Fact_MachineRegion_RebuildType_AvgCost": machine_region_ccr_type_avg,
+        "Fact_Machine_Insights": machine_insights_export,
+        "Fact_Machine_Ranking": fact_machine_summary,
+        "Fact_Dealer_Performance": fact_dealer_performance,
+        "Fact_Region_Performance": fact_region_performance,
+        "Fact_Exception_Rows": fact_exceptions,
+        "Fact_Outlier_Rows": fact_outliers,
+        "Fact_CrossType_Outliers": fact_cross_type_outliers,
+        "Fact_Rate_Coverage": fact_rate_coverage,
+        "Fact_Data_Quality": fact_data_quality,
+        "DataQuality_Summary": data_quality_summary,
         "Dim_Machine": dim_machine,
         "Dim_Dealer": dim_dealer,
         "Dim_Rebuild_Type": dim_rebuild_type,
         "Dim_Region": dim_region,
         "Dim_Service_Year": dim_date,
-        "Fact_Exception_Rows": fact_exceptions,
-        "Fact_Outlier_Rows": fact_outliers,
-        "Fact_CrossType_Flags": fact_cross_flags,
-        "Fact_Global_RebuildType_AvgCost": global_ccr_type_avg,
-        "Fact_Region_RebuildType_AvgCost": region_ccr_type_avg,
-        "Fact_Machine_RebuildType_AvgCost": machine_ccr_type_avg,
-        "Fact_MachineGroup_RebuildType_AvgCost": machine_group_ccr_type_avg,
-        "Fact_Machine_Insights": machine_insights_export,
-        "Fact_Machine_Ranking": fact_machine_summary,
-        "Fact_Dealer_Performance": fact_dealer_performance,
-        "Fact_Region_Performance": fact_region_performance,
-        "Fact_Rate_Coverage": fact_rate_coverage,
-        "Fact_Data_Quality": fact_data_quality,
-        "DataQuality_Summary": data_quality_summary,
+        "Machine_Grouping": _add_run_columns(analysis.get("machine_grouping_lookup", pd.DataFrame()).copy(), run_id, scenario_label),
         "Run_Metadata": _clean_powerbi_columns(run_metadata),
-        "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
-        "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
-        "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
+        "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
         "Relationship_Guide": relationship_guide,
         "DAX_Starter": dax_starter,
-        "PowerBI_Instructions": powerbi_instructions,
-        "PowerBI_Report_Layout": powerbi_report_layout,
-        "Scenario_Comparison": scenario_comparison,
-        "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
-        "Machine_Grouping": machine_grouping,
-        "PowerBI_Table_Dictionary": powerbi_table_dictionary,
-        "Export_Mode_Dictionary": export_mode_dictionary,
-        "Required_Files": required_files_table,
-        "Testing_Checklist": testing_checklist_table,
-        "Update_Process": update_process_table,
-        "PowerBI_Readiness": provisional_tables["PowerBI_Readiness"],
+        "PowerBI_Instructions": build_powerbi_instructions_table(),
+        "PowerBI_Report_Layout": build_powerbi_report_layout_table(),
+        "PowerBI_Table_Dictionary": build_powerbi_table_dictionary(),
+        "Export_Mode_Dictionary": build_export_mode_dictionary(),
+        "Required_Files": build_required_files_checklist(),
+        "Testing_Checklist": build_testing_checklist(),
+        "Update_Process": build_update_process_table(),
+        "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
+        "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
+        "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
+        "Scenario_Comparison": build_scenario_comparison_table(analysis, run_id, scenario_label),
     }
-    return {name: table for name, table in tables.items() if table is not None and isinstance(table, pd.DataFrame)}
+    preview = build_powerbi_export_preview(tables, list(tables.keys()))
+    readiness = build_powerbi_readiness_score(preview)
+    tables["PowerBI_Readiness"] = pd.concat([readiness.assign(Section="Score"), preview.assign(Section="Table Check")], ignore_index=True, sort=False)
+    ordered = {name: tables[name] for name in POWERBI_FULL_EXPORT_TABLES if name in tables}
+    # Include scenario comparison even if not in primary list for run-to-run analysis.
+    ordered["Scenario_Comparison"] = tables["Scenario_Comparison"]
+    return ordered
 
 
 def _strip_powerbi_confidential_marker_rows(df):
@@ -2363,16 +2414,11 @@ def _strip_powerbi_confidential_marker_rows(df):
 
 def write_powerbi_dataset_workbook(writer, analysis, scenario_name_value, export_reason_value, export_mode_value, selected_tables=None):
     tables = build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_value, export_mode_value)
-    selected_tables = selected_tables or list(tables.keys())
     for sheet_name, table in tables.items():
-        if sheet_name not in selected_tables:
-            continue
-        safe_name = safe_sheet_name(sheet_name)
+        safe_name = POWERBI_SHEET_NAME_MAP.get(sheet_name, safe_sheet_name(sheet_name))
         clean_table = _strip_powerbi_confidential_marker_rows(table)
-        # Explicit startrow=0 ensures row 1 is always the actual column header row for Power BI.
         clean_table.to_excel(writer, sheet_name=safe_name, index=False, startrow=0)
         ws = writer.book[safe_name]
-        # Freeze on row 2 for convenience only; no inserted rows, merged cells, or watermarking.
         ws.freeze_panes = "A2"
 
 
@@ -2448,7 +2494,7 @@ st.markdown(
     """
     <div class="method-card">
         <div class="method-title">Active Analysis Logic</div>
-        <div class="method-body">Cost = PARTS DN USD + Labor Cost USD. Inflation is applied by component. Outliers use log(cost) + IQR by Machine + CCR TYPE. CPT+H cross-type flags compare against machine-level CMR benchmark.</div>
+        <div class="method-body">Cost = PARTS DN USD + Labor Cost USD. Inflation is applied by component. Outliers use log(cost) + IQR by Machine + CCR TYPE. CPT+H cross-type exceptions are treated as outliers, excluded from core averages, and audited in Power BI.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -2567,19 +2613,10 @@ with st.expander("Advanced Threshold Configuration", expanded=False):
     max_rows_warning_threshold = st.number_input("Large-run row warning threshold", min_value=1000, max_value=250000, value=DEFAULT_MAX_ROWS_WARNING, step=1000)
 
 st.subheader("Export Controls")
-export_mode = st.selectbox("Full workbook export mode", ["Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Power BI Dataset Export", "Scenario Archive Package"], index=0)
-powerbi_export_preset = "Standard"
-powerbi_selected_tables = DEFAULT_POWERBI_TABLES_STANDARD.copy()
+export_mode = st.selectbox("Export mode", ["Power BI Dataset Export", "Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Scenario Archive Package"], index=0)
+powerbi_selected_tables = POWERBI_FULL_EXPORT_TABLES.copy()
 if export_mode in ["Power BI Dataset Export", "Scenario Archive Package"]:
-    st.write("### Power BI Export Table Selection")
-    powerbi_export_preset = st.selectbox("Power BI export preset", ["Standard", "Detailed", "Full Audit", "Custom"], index=0)
-    preset_tables = POWERBI_PRESET_MAP.get(powerbi_export_preset, DEFAULT_POWERBI_TABLES_STANDARD)
-    if powerbi_export_preset == "Custom":
-        powerbi_selected_tables = st.multiselect("Select Power BI tables to include", POWERBI_TABLE_OPTIONS, default=DEFAULT_POWERBI_TABLES_DETAILED)
-    else:
-        powerbi_selected_tables = st.multiselect("Tables included in this preset", POWERBI_TABLE_OPTIONS, default=preset_tables)
-    if not powerbi_selected_tables:
-        st.warning("Select at least one Power BI table before exporting.")
+    st.info("Power BI is the primary output. The app now produces one full detailed Power BI export with all required fact, dimension, audit, relationship, DAX, and handoff tables. Row 1 is always the header row on every exported sheet.")
 
 export_reason = st.selectbox("Export reason", ["Manager review", "Dealer review", "Cost benchmarking", "Data validation", "Presentation support", "Other"], index=0)
 export_reason_other = ""
@@ -2758,14 +2795,20 @@ def run_analysis(rebuild_file, rate_file):
 
     df["Data Quality Exception Flag"] = ""
     df.loc[df["SMU AT REBUILD"].isin([0, 1]), "Data Quality Exception Flag"] = "SMU 0 or 1"
+    df["Statistical Cost Outlier Flag"] = False
+    df["Cross-Type Outlier Flag"] = False
     df["Outlier"] = False
+    df["Outlier Rule Type"] = "Not Outlier"
     df["Outlier Reason"] = ""
+    df["Excluded From Core Averages"] = False
+    df["Excluded From Power BI Average Tables"] = False
     df["Insufficient Sample Group"] = False
     for (machine, ccr_type), group in df.groupby(["SALES MODEL", "CCR TYPE"], dropna=False):
         idx = group.index
         n = len(group)
         if n < 5:
             df.loc[idx, "Insufficient Sample Group"] = True
+            df.loc[idx, "Outlier Rule Type"] = "Insufficient Sample - Not Removed"
             df.loc[idx, "Outlier Reason"] = "Insufficient sample; no statistical outlier removal"
             continue
         log_vals = np.log(group[cost_col])
@@ -2775,35 +2818,51 @@ def run_analysis(rebuild_file, rate_file):
         low = q1 - mult * iqr
         high = q3 + mult * iqr
         mask = (log_vals < low) | (log_vals > high)
-        df.loc[idx, "Outlier"] = mask
-        df.loc[idx[mask], "Outlier Reason"] = "Cost outlier: log(cost) IQR rule"
-
-    valid = df[df["Outlier"] == False].copy()
-    if valid.empty:
-        raise ValueError("All rows were excluded as cost outliers. Review data or filters.")
+        outlier_idx = group.index[mask]
+        df.loc[outlier_idx, "Statistical Cost Outlier Flag"] = True
+        df.loc[outlier_idx, "Outlier Reason"] = "Cost outlier: log(cost) IQR rule"
 
     df["Cross-Type Exception Flag"] = ""
     df["CMR Benchmark Cost"] = np.nan
+    df["Cross-Type Threshold Cost"] = np.nan
     for machine, group in df.groupby("SALES MODEL", dropna=False):
-        cmr_valid = group[(group["CCR TYPE"] == "CMR") & (group["Outlier"] == False)]
+        cmr_valid = group[(group["CCR TYPE"] == "CMR") & (group["Statistical Cost Outlier Flag"] == False)]
         if len(cmr_valid) >= int(min_cmr_rows_for_benchmark):
             benchmark = cmr_valid[cost_col].median()
+            threshold = benchmark * float(cross_type_threshold_multiplier)
             df.loc[group.index, "CMR Benchmark Cost"] = benchmark
-            mask = group["CCR TYPE"].eq("CPT+H") & group["Outlier"].eq(False) & (group[cost_col] > benchmark * float(cross_type_threshold_multiplier))
-            df.loc[group.index[mask], "Cross-Type Exception Flag"] = "CPT+H Cost Above Typical CMR"
+            df.loc[group.index, "Cross-Type Threshold Cost"] = threshold
+            mask = group["CCR TYPE"].eq("CPT+H") & group["Statistical Cost Outlier Flag"].eq(False) & (group[cost_col] > threshold)
+            cross_idx = group.index[mask]
+            df.loc[cross_idx, "Cross-Type Outlier Flag"] = True
+            df.loc[cross_idx, "Cross-Type Exception Flag"] = "CPT+H Cost Above Typical CMR - Treated as Outlier"
+
+    both = df["Statistical Cost Outlier Flag"] & df["Cross-Type Outlier Flag"]
+    stat_only = df["Statistical Cost Outlier Flag"] & ~df["Cross-Type Outlier Flag"]
+    cross_only = df["Cross-Type Outlier Flag"] & ~df["Statistical Cost Outlier Flag"]
+    df.loc[stat_only, "Outlier Rule Type"] = "Statistical Cost Outlier"
+    df.loc[cross_only, "Outlier Rule Type"] = "Cross-Type Cost Outlier"
+    df.loc[both, "Outlier Rule Type"] = "Statistical and Cross-Type Cost Outlier"
+    df.loc[cross_only, "Outlier Reason"] = "CPT+H cost above machine-level CMR benchmark threshold"
+    df.loc[both, "Outlier Reason"] = "Cost outlier and CPT+H cross-type benchmark outlier"
+    df["Outlier"] = df["Statistical Cost Outlier Flag"] | df["Cross-Type Outlier Flag"]
+    df["Excluded From Core Averages"] = df["Outlier"]
+    df["Excluded From Power BI Average Tables"] = df["Outlier"]
 
     valid = df[df["Outlier"] == False].copy()
+    if valid.empty:
+        raise ValueError("All rows were excluded as outliers. Review data or filters.")
+
     summary = valid.groupby("CCR TYPE").agg(Avg_Cost=(cost_col, "mean"), Avg_SMU=("SMU AT REBUILD", "mean"), Count=(cost_col, "count")).reset_index()
     summary = add_vs_cmr(summary)
     summary["Sample Confidence"] = summary["Count"].apply(sample_confidence)
-    adjusted_valid = valid[~((valid["CCR TYPE"] == "CPT+H") & (valid["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
-    adjusted_summary = adjusted_valid.groupby("CCR TYPE").agg(Adjusted_Avg_Cost=(cost_col, "mean"), Count=(cost_col, "count")).reset_index()
-    adjusted_summary["CCR TYPE"] = adjusted_summary["CCR TYPE"].replace({"CPT+H": "CPT+H Adjusted"})
-    adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
-    global_ccr_type_summary = build_combined_global_ccr_type_summary(valid, adjusted_valid, cost_col)
-    region_ccr_type_summary = build_combined_region_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
-    machine_ccr_type_summary = build_combined_machine_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
-    machine_group_ccr_type_summary = build_combined_machine_group_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary)
+    adjusted_valid = valid.copy()
+    adjusted_summary = pd.DataFrame(columns=["CCR TYPE", "Adjusted_Avg_Cost", "Count", "Sample Confidence"])
+    global_ccr_type_summary = build_combined_global_ccr_type_summary(valid, adjusted_valid, cost_col, processed_df=df)
+    region_ccr_type_summary = build_combined_region_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary, processed_df=df)
+    machine_ccr_type_summary = build_combined_machine_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary, processed_df=df)
+    machine_group_ccr_type_summary = build_combined_machine_group_ccr_type_summary(valid, adjusted_valid, cost_col, global_ccr_type_summary, processed_df=df)
+    machine_region_ccr_type_summary = build_machine_region_ccr_type_summary(valid, df, cost_col, global_ccr_type_summary)
     machine_insights = build_machine_insights_table(valid, df, machine_ccr_type_summary, cost_col)
     rebuild_reference = pd.DataFrame([{"CCR TYPE": key, "Description": value} for key, value in CERTIFIED_REBUILD_TYPES.items()])
     region_reference = pd.DataFrame({"Configured Region": VALID_REGIONS})
@@ -2823,11 +2882,11 @@ def run_analysis(rebuild_file, rate_file):
     role_policy = build_role_policy_table()
     performance_safeguards = build_performance_safeguard_summary(rows_uploaded, len(df))
     evaluate_strict_mode(run_readiness_summary, dealer_rate_coverage_summary, data_quality_score_summary, len(df))
-    show_adjusted_cpth = has_both_cmr_cpth(valid)
+    show_adjusted_cpth = False
     machine_benchmark_ranking = build_machine_benchmark_ranking(valid, df, cost_col)
-    executive_narrative = build_executive_narrative(valid, summary, cost_col, int(df["Outlier"].sum()), int((valid["Cross-Type Exception Flag"] != "").sum()), dealer_rate_coverage_summary, data_quality_score_summary, show_adjusted_cpth)
+    executive_narrative = build_executive_narrative(valid, summary, cost_col, int(df["Outlier"].sum()), int(df["Cross-Type Outlier Flag"].sum()), dealer_rate_coverage_summary, data_quality_score_summary, show_adjusted_cpth)
 
-    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int((valid["Cross-Type Exception Flag"] != "").sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards, "global_ccr_type_summary": global_ccr_type_summary, "region_ccr_type_summary": region_ccr_type_summary, "machine_ccr_type_summary": machine_ccr_type_summary, "machine_group_ccr_type_summary": machine_group_ccr_type_summary, "machine_insights": machine_insights, "machine_grouping_lookup": machine_grouping_lookup, "filter_summary": build_filter_summary_table()}
+    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int(df["Cross-Type Outlier Flag"].sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards, "global_ccr_type_summary": global_ccr_type_summary, "region_ccr_type_summary": region_ccr_type_summary, "machine_ccr_type_summary": machine_ccr_type_summary, "machine_group_ccr_type_summary": machine_group_ccr_type_summary, "machine_region_ccr_type_summary": machine_region_ccr_type_summary, "machine_insights": machine_insights, "machine_grouping_lookup": machine_grouping_lookup, "filter_summary": build_filter_summary_table()}
 
 # =====================================================
 # RENDER RESULTS
@@ -2881,6 +2940,7 @@ if st.session_state.run_clicked and rebuild_file:
     region_ccr_type_summary = analysis.get("region_ccr_type_summary", pd.DataFrame())
     machine_ccr_type_summary = analysis.get("machine_ccr_type_summary", pd.DataFrame())
     machine_group_ccr_type_summary = analysis.get("machine_group_ccr_type_summary", pd.DataFrame())
+    machine_region_ccr_type_summary = analysis.get("machine_region_ccr_type_summary", pd.DataFrame())
     machine_insights = analysis.get("machine_insights", pd.DataFrame())
     filter_summary = analysis.get("filter_summary", pd.DataFrame())
     machine_grouping_lookup = analysis.get("machine_grouping_lookup", pd.DataFrame())
@@ -2915,13 +2975,12 @@ if st.session_state.run_clicked and rebuild_file:
         col1.metric("Valid Rows", f"{len(valid):,}")
         col2.metric("Cost Outliers", f"{outlier_count:,}")
         col3.metric("Avg USD Analysis Cost", money(valid[cost_col].mean()))
-        col4.metric("Cross-Type Flags", f"{cross_count:,}")
+        col4.metric("Cross-Type Outliers", f"{cross_count:,}")
         st.write("### Combined Global CCR Type Average Cost")
-        display_table(global_ccr_type_summary, currency_cols=["Avg_Cost", "Global CCR Avg Cost"], percent_cols=["Vs CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
-        if not show_adjusted_cpth:
-            st.info("Adjusted CPT+H rows appear only when both CMR and CPT+H records are available for comparison.")
+        display_table(global_ccr_type_summary, currency_cols=["Avg_Cost", "Global CCR Avg Cost"], percent_cols=["Vs CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"])
+        st.info("V18 methodology reports one CPT+H value. Cross-type CPT+H exceptions are treated as outliers, excluded from this table, and audited separately in Power BI.")
         st.write("### Machine Group Average Cost by Rebuild Type")
-        display_table(machine_group_ccr_type_summary, currency_cols=["Avg_Cost", "Group CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Group CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+        display_table(machine_group_ccr_type_summary, currency_cols=["Avg_Cost", "Group CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Group CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"])
         if not machine_group_ccr_type_summary.empty:
             group_options = sorted(machine_group_ccr_type_summary["Machine Group"].dropna().unique().tolist())
             selected_group_for_chart = st.selectbox("Machine Group Rebuild-Type Chart", group_options, key="machine_group_ccr_chart_selector")
@@ -2942,19 +3001,13 @@ if st.session_state.run_clicked and rebuild_file:
         selected_machine = st.selectbox("Select Machine", machine_list, key="machine_detail_selector")
         dfm = valid[valid["SALES MODEL"] == selected_machine].copy()
         dfm_all = df[df["SALES MODEL"] == selected_machine].copy()
-        machine_adjusted_valid = dfm[~((dfm["CCR TYPE"] == "CPT+H") & (dfm["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
         st.write(f"### Machine: {selected_machine}")
         mcol1, mcol2, mcol3, mcol4 = st.columns(4)
-        machine_show_adjusted_cpth = has_both_cmr_cpth(dfm)
-        mcol1.metric("Standard Avg Cost", money(dfm[cost_col].mean()))
-        if machine_show_adjusted_cpth:
-            mcol2.metric("Adjusted Avg Cost", money(machine_adjusted_valid[cost_col].mean()))
-            adj_cpth = machine_adjusted_valid[machine_adjusted_valid["CCR TYPE"] == "CPT+H"][cost_col].mean()
-            mcol3.metric("Adjusted CPT+H Avg", money(adj_cpth) if pd.notna(adj_cpth) else "N/A")
-        else:
-            mcol2.metric("Adjusted Avg Cost", "N/A")
-            mcol3.metric("Adjusted CPT+H Avg", "N/A")
-        mcol4.metric("Machine Outliers", f"{int(dfm_all['Outlier'].sum()):,}")
+        machine_show_adjusted_cpth = False
+        mcol1.metric("Reported Avg Cost", money(dfm[cost_col].mean()))
+        mcol2.metric("Statistical Outliers", f"{int(dfm_all.get('Statistical Cost Outlier Flag', pd.Series(dtype=bool)).sum()):,}")
+        mcol3.metric("Cross-Type Outliers", f"{int(dfm_all.get('Cross-Type Outlier Flag', pd.Series(dtype=bool)).sum()):,}")
+        mcol4.metric("Total Outliers", f"{int(dfm_all['Outlier'].sum()):,}")
 
         machine_export_bytes = build_machine_export(selected_machine, analysis)
         safe_machine = str(selected_machine).replace("/", "-").replace("\\", "-").replace(" ", "_")
@@ -2973,16 +3026,15 @@ if st.session_state.run_clicked and rebuild_file:
         machine_type_summary["Sample Confidence"] = machine_type_summary["Count"].apply(sample_confidence)
         st.write("### Combined Machine CCR Type Average Cost")
         selected_machine_ccr = machine_ccr_type_summary[machine_ccr_type_summary["SALES MODEL"] == selected_machine].copy() if not machine_ccr_type_summary.empty else pd.DataFrame()
-        display_table(selected_machine_ccr, currency_cols=["Avg_Cost", "Machine CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Machine CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+        display_table(selected_machine_ccr, currency_cols=["Avg_Cost", "Machine CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Machine CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"])
         if not selected_machine_ccr.empty:
             cat_rebuild_type_bar_chart(selected_machine_ccr, value_col="Avg_Cost")
         st.write("### Region Breakdown by Rebuild Type (Shown Once for Selected Machine)")
-        selected_machine_region_adjusted = dfm[~((dfm["CCR TYPE"] == "CPT+H") & (dfm["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
-        selected_machine_region_ccr = build_combined_region_ccr_type_summary(dfm, selected_machine_region_adjusted, cost_col, global_ccr_type_summary)
+        selected_machine_region_ccr = machine_region_ccr_type_summary[machine_region_ccr_type_summary["SALES MODEL"] == selected_machine].copy() if not machine_region_ccr_type_summary.empty else pd.DataFrame()
         if selected_machine_region_ccr.empty:
             st.info("No regional rebuild-type breakdown available for this machine.")
         else:
-            display_table(selected_machine_region_ccr, currency_cols=["Avg_Cost", "Regional CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Regional CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+            display_table(selected_machine_region_ccr, currency_cols=["Avg_Cost", "Regional CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Regional CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"])
             for region_name in selected_machine_region_ccr["Region"].dropna().unique():
                 st.write(f"#### {region_name}")
                 region_chart_data = selected_machine_region_ccr[selected_machine_region_ccr["Region"] == region_name].copy()
@@ -2990,21 +3042,20 @@ if st.session_state.run_clicked and rebuild_file:
         selected_machine_insights = machine_insights[machine_insights["SALES MODEL"] == selected_machine].copy() if not machine_insights.empty else pd.DataFrame()
         st.write("### Machine-Level Insights")
         display_table(selected_machine_insights, currency_cols=["Metric Value"])
-        if not machine_show_adjusted_cpth:
-            st.info("Adjusted CPT+H rows appear only when both CMR and CPT+H records are available for this machine.")
+        st.info("One CPT+H value is reported for this machine. Cross-type CPT+H outliers are excluded and available for audit.")
 
         st.write("### Machine SMU vs USD Analysis Cost")
         machine_chart = dfm[["SMU AT REBUILD", cost_col, "CCR TYPE"]].dropna().rename(columns={"SMU AT REBUILD": "SMU", cost_col: "Cost"})
         cat_scatter_chart(machine_chart, "SMU", "Cost", "CCR TYPE", tooltip=["CCR TYPE", "SMU", "Cost"])
 
-        st.write("### Cross-Type Exception Review")
+        st.write("### Cross-Type Outlier Audit")
         benchmark_value = dfm_all["CMR Benchmark Cost"].dropna().iloc[0] if not dfm_all["CMR Benchmark Cost"].dropna().empty else np.nan
-        machine_cross = dfm[dfm["Cross-Type Exception Flag"] != ""]
-        st.dataframe(pd.DataFrame({"Metric": ["CMR Benchmark Cost", "CPT+H Cross-Type Flags", "Machine Outliers"], "Value": [money(benchmark_value) if not pd.isna(benchmark_value) else "N/A", f"{len(machine_cross):,}", f"{int(dfm_all['Outlier'].sum()):,}"]}), use_container_width=True)
+        machine_cross = dfm_all[dfm_all.get("Cross-Type Outlier Flag", False) == True]
+        st.dataframe(pd.DataFrame({"Metric": ["CMR Benchmark Cost", "CPT+H Cross-Type Outliers", "Machine Outliers"], "Value": [money(benchmark_value) if not pd.isna(benchmark_value) else "N/A", f"{len(machine_cross):,}", f"{int(dfm_all['Outlier'].sum()):,}"]}), use_container_width=True)
         if not machine_cross.empty:
             display_table(machine_cross[["DEALER", "Region", "CCR TYPE", "SMU AT REBUILD", cost_col, "CMR Benchmark Cost", "Cross-Type Exception Flag"]], currency_cols=[cost_col, "CMR Benchmark Cost"], smu_cols=["SMU AT REBUILD"])
         else:
-            st.write("No CPT+H cross-type exceptions for this machine.")
+            st.write("No CPT+H cross-type outliers for this machine.")
 
         st.write("### Outlier Performance")
         outlier_perf = dfm_all.groupby("CCR TYPE").agg(Total_Rows=(cost_col, "count"), Outlier_Rows=("Outlier", "sum"), Avg_Cost_All=(cost_col, "mean")).reset_index()
@@ -3043,8 +3094,8 @@ if st.session_state.run_clicked and rebuild_file:
         if region_machine != "All Machines":
             region_adjusted_valid = region_df[~((region_df["CCR TYPE"] == "CPT+H") & (region_df["Cross-Type Exception Flag"] == "CPT+H Cost Above Typical CMR"))].copy()
             region_type = build_combined_region_ccr_type_summary(region_df, region_adjusted_valid, cost_col, global_ccr_type_summary)
-        st.write("### Region by CCR Type with Standard and Adjusted CPT+H")
-        display_table(region_type, currency_cols=["Avg_Cost", "Regional CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Regional CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Cross-Type Flags Removed"])
+        st.write("### Region by Rebuild Type")
+        display_table(region_type, currency_cols=["Avg_Cost", "Regional CMR Avg Cost", "Global CCR Avg Cost"], percent_cols=["Vs Regional CMR %", "Vs Global CCR Avg %"], smu_cols=["Avg_SMU"], number_cols=["Count", "Statistical Outliers Excluded", "Cross-Type Outliers Excluded", "Total Outliers Excluded"])
         st.write("### Separate Region Charts by Rebuild Type")
         if region_type.empty:
             st.info("No region rebuild-type chart data available.")
@@ -3056,7 +3107,7 @@ if st.session_state.run_clicked and rebuild_file:
 
     with tab5:
         st.subheader("Exception Summary")
-        exception_summary = pd.DataFrame({"Metric": ["Cost Outliers", "CPT+H Cross-Type Flags", "SMU 0 or 1", "Insufficient Sample Rows", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate"], "Value": [outlier_count, cross_count, dq_count, insufficient_count, global_year_fallback_count, overall_fallback_count]})
+        exception_summary = pd.DataFrame({"Metric": ["Cost Outliers", "CPT+H Cross-Type Outliers", "SMU 0 or 1", "Insufficient Sample Rows", "Rows Using Global Yearly Fallback Rate", "Rows Using Overall Average Fallback Rate"], "Value": [outlier_count, cross_count, dq_count, insufficient_count, global_year_fallback_count, overall_fallback_count]})
         st.dataframe(exception_summary, use_container_width=True)
         st.write("### Data Quality Summary")
         st.dataframe(data_quality_summary, use_container_width=True)
