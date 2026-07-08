@@ -15,13 +15,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V18.0"
+APP_VERSION = "V18.1"
 APP_LAST_UPDATED = "2026-07-08"
 METHODOLOGY_VERSION = "2026.07-PowerBI-CrossType-Outlier-v18"
 OUTLIER_RULE_VERSION = "Cost Log-IQR + CPT+H Cross-Type Outlier by Machine"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V18.0 Power BI Core Export & Cross-Type Outlier Methodology"
+EXPORT_FORMAT_VERSION = "V18.1 Power BI Model Handoff Upgrade"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -33,9 +33,10 @@ POWERBI_FULL_EXPORT_TABLES = [
     "Fact_Machine_Ranking", "Fact_Dealer_Performance", "Fact_Region_Performance",
     "Fact_Exception_Rows", "Fact_Outlier_Rows", "Fact_CrossType_Outliers",
     "Fact_Rate_Coverage", "Fact_Data_Quality", "DataQuality_Summary",
-    "Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
-    "Machine_Grouping", "Run_Metadata", "Filter_Summary", "Relationship_Guide", "DAX_Starter",
-    "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary",
+    "Dim_Machine", "Dim_Machine_Group", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
+    "Machine_Grouping", "Run_Metadata", "Filter_Summary", "Relationship_Guide", "PowerBI_Relationship_Checks",
+    "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary",
+    "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist",
     "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process",
     "Known_Limitations", "Data_Dictionary", "Parameters", "PowerBI_Readiness"
 ]
@@ -867,7 +868,7 @@ def build_powerbi_export_preview(tables, selected_tables=None):
         cols = [str(c) for c in table.columns]
         blank_cols = sum(1 for c in cols if c.strip() == "" or c.startswith("Unnamed"))
         dup_cols = len(cols) - len(set(cols))
-        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
+        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "PowerBI_Relationship_Checks", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary", "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
         marker_rows = 0
         if not table.empty:
             first_col = table.columns[0]
@@ -940,68 +941,141 @@ def build_scenario_comparison_table(analysis, run_id=None, scenario_name_value=N
 
 def build_powerbi_instructions_table():
     return pd.DataFrame({
-        "Step": [1, 2, 3, 4, 5, 6, 7],
+        "Step": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         "Instruction": [
-            "Open Power BI Desktop and select Get Data > Excel Workbook.",
-            "Choose the Power BI Dataset Export workbook from this app.",
-            "Load the full detailed Power BI export tables. Table selection presets have been removed for consistency.",
-            "Use Relationship_Guide to create suggested relationships.",
-            "Use DAX_Starter for optional starter measures.",
-            "Use Scenario_Comparison when appending multiple run exports.",
-            "Use Machine Group fields for grouped slicers and hierarchy visuals.",
+            "Export the Power BI Dataset Export from the app.",
+            "Save the export as Rebuild_Analytics_PowerBI_Dataset.xlsx in the approved SharePoint or OneDrive source folder.",
+            "In Power BI Desktop, select Get Data > Excel Workbook and choose the fixed source workbook.",
+            "Load all full detailed export tables. Do not use formatted review workbooks as Power BI sources.",
+            "Use PowerBI_Sheet_Name_Map to reconcile shortened Excel sheet names with logical table names.",
+            "Use Relationship_Guide and PowerBI_Relationship_Checks to create and validate model relationships.",
+            "Use Dim_Machine_Group for clean machine-group slicers and group-level views.",
+            "Use DAX_Starter to create initial measures and apply the recommended formats.",
+            "Use PowerBI_Report_Layout and PowerBI_Build_Checklist to build and test report pages.",
+            "After replacing the source workbook, refresh Power BI Desktop and validate slicers, totals, and exception pages."
         ],
         "Notes": [
-            "Use Power BI Dataset Export, not formatted review workbooks.",
-            "Each sheet is designed with headers in row 1.",
-            "Fact_Rebuild_Rows is the primary row-level table; Fact_MachineRegion_RebuildType_AvgCost supports machine-filtered region visuals.",
-            "Most relationships are many-to-one from Fact tables to Dim tables.",
-            "Review measure names and cost column before publishing.",
-            "Run ID can support comparing multiple scenarios later.",
-            "Custom uploaded grouping overrides built-in grouping where provided.",
+            "The app is now Power BI-first; this export is the primary downstream output.",
+            "Keep the file name and folder path stable so the Power BI connection does not break.",
+            "If the file is synced locally, Power BI can connect to the local synced path; otherwise use the SharePoint/OneDrive location approved by your organization.",
+            "Each exported sheet has headers on row 1 and no title/watermark rows.",
+            "Some logical table names exceed Excel's 31-character sheet limit and are shortened only at the worksheet level.",
+            "Recommended relationships are active, many-to-one, and single-direction unless the guide marks a relationship optional.",
+            "Dim_Machine_Group has one row per Machine Group and avoids many-to-many behavior when slicing by group.",
+            "Review cost column references if inflation is disabled or methodology changes.",
+            "Build pages in order: Executive, Machine Detail, Region, Dealer, Exceptions, Handoff.",
+            "Archive scenario packages separately from the fixed Power BI source workbook."
         ]
     })
 
 
 def build_powerbi_report_layout_table():
-    return pd.DataFrame({
-        "Page": ["Executive Overview", "Machine Detail", "Machine Group View", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Scenario Comparison"],
-        "Visual": ["Cards + rebuild-type bar charts", "Slicers + rebuild-type chart + region charts", "Grouped rebuild-type chart", "Ranked bar/matrix", "Separate region rebuild-type charts", "Tables + count by type", "Trend/table"],
-        "Primary Table": ["Fact_Global_RebuildType_AvgCost", "Fact_Machine_RebuildType_AvgCost", "Fact_MachineGroup_RebuildType_AvgCost", "Fact_Dealer_Performance", "Fact_Region_RebuildType_AvgCost", "Fact_Exception_Rows", "Scenario_Comparison"],
-        "Suggested Fields": ["CCR Display, Avg_Cost, Count", "SALES MODEL, CCR Display, Avg_Cost, Region", "Machine Group, CCR Display, Avg_Cost", "Dealer Code, DEALER, Avg_Cost, Performance Label", "Region, CCR Display, Avg_Cost, Vs Regional CMR %", "Exception Type, Exception Detail, Cost", "Run ID, Scenario Name, Avg Cost, Outlier Rate %"],
-        "Purpose": ["High-level rebuild-type cost summary", "Analyze a selected machine/model", "Compare machine families by rebuild type", "Compare dealer cost performance", "Compare regional cost performance by rebuild type", "Review rows requiring attention", "Compare multiple exported scenarios"],
-    })
-
-
-
-def build_powerbi_table_dictionary():
-    """Business-friendly dictionary for every Power BI export table."""
     return pd.DataFrame([
-        {"Table Name": "Fact_Rebuild_Rows", "Purpose": "Primary processed rebuild row table, including costs, flags, dealer rates, CPI, FX, and source attributes.", "Typical Power BI Use": "Main fact table for slicers, row-level tables, cost measures, and exception filtering.", "Key Fields": "Run ID, SALES MODEL, Machine Group, Dealer Code, Region, CCR TYPE, cost columns, Outlier, Cross-Type Exception Flag"},
-        {"Table Name": "Fact_Valid_Rebuild_Rows", "Purpose": "Non-outlier processed rebuild rows used in core average calculations.", "Typical Power BI Use": "Use when visuals should match the app's core valid averages exactly.", "Key Fields": "Run ID, SALES MODEL, Region, CCR TYPE, cost columns, SMU AT REBUILD"},
-        {"Table Name": "Dim_Machine", "Purpose": "Machine model and machine grouping lookup.", "Typical Power BI Use": "Machine slicers, grouping hierarchy, and model-level filtering.", "Key Fields": "SALES MODEL, Machine Group, Machine Family, Machine Category"},
-        {"Table Name": "Dim_Dealer", "Purpose": "Dealer and region lookup table.", "Typical Power BI Use": "Dealer slicers and dealer-level performance pages.", "Key Fields": "Dealer Code, DEALER, Region"},
-        {"Table Name": "Dim_Rebuild_Type", "Purpose": "Certified rebuild type reference table.", "Typical Power BI Use": "Rebuild type slicers and lookup descriptions.", "Key Fields": "CCR TYPE, Rebuild Description"},
-        {"Table Name": "Dim_Region", "Purpose": "Configured region reference table.", "Typical Power BI Use": "Region slicers and region-level charts.", "Key Fields": "Region, Configured Region Flag"},
-        {"Table Name": "Dim_Service_Year", "Purpose": "Service year dimension.", "Typical Power BI Use": "Year slicers and trend visuals.", "Key Fields": "Service Year, Year, Year Label"},
-        {"Table Name": "Fact_Global_RebuildType_AvgCost", "Purpose": "Global average cost by rebuild type, with one reported CPT+H value after statistical and cross-type outlier exclusions.", "Typical Power BI Use": "Executive rebuild-type average cost bar charts.", "Key Fields": "CCR Display, CCR TYPE, Avg_Cost, Count"},
-        {"Table Name": "Fact_Region_RebuildType_AvgCost", "Purpose": "Average cost by region and rebuild type, including regional CMR and global rebuild-type comparison fields.", "Typical Power BI Use": "Separate region charts and regional matrix views.", "Key Fields": "Region, CCR Display, Avg_Cost, Vs Regional CMR %, Vs Global CCR Avg %"},
-        {"Table Name": "Fact_Machine_RebuildType_AvgCost", "Purpose": "Average cost by machine and rebuild type, with cross-type CPT+H outliers excluded from reported averages.", "Typical Power BI Use": "Machine detail charts and rebuild-type drill-through pages.", "Key Fields": "SALES MODEL, CCR Display, Avg_Cost, Vs Machine CMR %, Count"},
-        {"Table Name": "Fact_MachineGroup_RebuildType_AvgCost", "Purpose": "Average cost by machine group/family and rebuild type, not just total average cost.", "Typical Power BI Use": "Machine family/group comparison charts.", "Key Fields": "Machine Group, Machine Family, CCR Display, Avg_Cost, Count"},
-        {"Table Name": "Fact_MachineRegion_RebuildType_AvgCost", "Purpose": "Average cost by machine, region, and rebuild type so region visuals respond to machine slicers.", "Typical Power BI Use": "Machine detail region charts and region drill-through pages.", "Key Fields": "SALES MODEL, Region, CCR Display, Avg_Cost, Count, Total Outliers Excluded"},
-        {"Table Name": "Fact_Machine_Insights", "Purpose": "Machine-level narrative insights in table form.", "Typical Power BI Use": "Machine insight cards/tables and drill-through notes.", "Key Fields": "SALES MODEL, Insight Category, Insight Text, Metric Name, Metric Value, Priority"},
-        {"Table Name": "Fact_Machine_Ranking", "Purpose": "Machine ranking and priority scoring output.", "Typical Power BI Use": "Executive ranking tables and priority-score visuals.", "Key Fields": "SALES MODEL, Avg_Cost, Priority Score, Priority Label"},
-        {"Table Name": "Fact_Dealer_Performance", "Purpose": "Dealer-level performance scoring and cost position metrics.", "Typical Power BI Use": "Dealer scorecards and review-needed dealer lists.", "Key Fields": "Dealer Code, DEALER, Avg_Cost, Performance Score, Performance Label"},
-        {"Table Name": "Fact_Region_Performance", "Purpose": "Region-level performance summary.", "Typical Power BI Use": "Region scorecards and regional summary pages.", "Key Fields": "Region, Avg_Cost, Count, Outlier Rate %, Vs Overall Avg %"},
-        {"Table Name": "Fact_Exception_Rows", "Purpose": "Unified exception table for outliers, cross-type flags, data-quality flags, dealer-rate exceptions, and FX fallback rows.", "Typical Power BI Use": "Exception review page and drill-through table.", "Key Fields": "Exception Type, Exception Detail, SALES MODEL, Region, Cost"},
-        {"Table Name": "Fact_Outlier_Rows", "Purpose": "Only rows flagged as cost outliers.", "Typical Power BI Use": "Outlier audit page.", "Key Fields": "SALES MODEL, CCR TYPE, Outlier Reason, cost columns"},
-        {"Table Name": "Fact_CrossType_Outliers", "Purpose": "CPT+H rows above the machine-level CMR benchmark and excluded from core averages.", "Typical Power BI Use": "Cross-type outlier audit page.", "Key Fields": "SALES MODEL, CCR TYPE, CMR Benchmark Cost, Cross-Type Exception Flag"},
-        {"Table Name": "Fact_Rate_Coverage", "Purpose": "Dealer labor-rate coverage and fallback summary.", "Typical Power BI Use": "Rate governance scorecard.", "Key Fields": "Metric, Value"},
-        {"Table Name": "Fact_Data_Quality", "Purpose": "Data quality score and supporting data-quality metrics.", "Typical Power BI Use": "Data quality scorecard.", "Key Fields": "Metric, Value"},
-        {"Table Name": "Run_Metadata", "Purpose": "Run settings, methodology version, selected filters, and export context.", "Typical Power BI Use": "Report footer, tooltips, and audit pages.", "Key Fields": "Field, Value"},
-        {"Table Name": "Relationship_Guide", "Purpose": "Suggested model relationships for Power BI.", "Typical Power BI Use": "Build guide for semantic model setup.", "Key Fields": "From Table, From Column, To Table, To Column"},
-        {"Table Name": "DAX_Starter", "Purpose": "Starter DAX measures for report builders.", "Typical Power BI Use": "Copy/paste or adapt initial measures.", "Key Fields": "Measure Name, DAX Expression"},
+        {"Page": "Executive Overview", "Section": "KPI Strip", "Visual Type": "Card", "Primary Table": "Fact_Rebuild_Rows", "Fields": "Average Cost, Valid Rows, Total Rows, Outlier Rows, Cross-Type Outliers", "Filters": "Run ID, Service Year, Region, Machine Group", "Sort": "Not applicable", "Purpose": "Show core run-level cost and quality metrics."},
+        {"Page": "Executive Overview", "Section": "Rebuild Type Cost", "Visual Type": "Clustered column chart", "Primary Table": "Fact_Global_RebuildType_AvgCost", "Fields": "CCR Display, CCR Display Order, Avg_Cost, Count", "Filters": "Run ID, Service Year", "Sort": "CCR Display Order ascending", "Purpose": "Compare reported CMR, CPT+H, and CPT-O costs after outlier exclusions."},
+        {"Page": "Executive Overview", "Section": "Machine Group Cost", "Visual Type": "Clustered column chart", "Primary Table": "Fact_MachineGroup_RebuildType_AvgCost", "Fields": "Machine Group, CCR Display, Avg_Cost, Count", "Filters": "Machine Group, Service Year, Region", "Sort": "Avg_Cost descending or CCR Display Order ascending", "Purpose": "Compare rebuild-type costs across machine groups."},
+        {"Page": "Machine Detail", "Section": "Machine Selectors", "Visual Type": "Slicer", "Primary Table": "Dim_Machine", "Fields": "Machine Group, SALES MODEL", "Filters": "Not applicable", "Sort": "Machine Group then SALES MODEL", "Purpose": "Select machine scope for detail analysis."},
+        {"Page": "Machine Detail", "Section": "Machine Rebuild Type Cost", "Visual Type": "Clustered column chart", "Primary Table": "Fact_Machine_RebuildType_AvgCost", "Fields": "SALES MODEL, CCR Display, CCR Display Order, Avg_Cost", "Filters": "SALES MODEL", "Sort": "CCR Display Order ascending", "Purpose": "Show one reported value for each rebuild type for the selected machine."},
+        {"Page": "Machine Detail", "Section": "Machine Region Breakdown", "Visual Type": "Small multiples column chart or matrix", "Primary Table": "Fact_MachineRegion_RebuildType_AvgCost", "Fields": "SALES MODEL, Region, CCR Display, Avg_Cost, Count", "Filters": "SALES MODEL, Region", "Sort": "Region then CCR Display Order", "Purpose": "Show region rebuild-type cost differences that respond to machine slicers."},
+        {"Page": "Region Performance", "Section": "Region Rebuild Type View", "Visual Type": "Small multiples column chart", "Primary Table": "Fact_MachineRegion_RebuildType_AvgCost", "Fields": "Region, SALES MODEL, CCR Display, Avg_Cost", "Filters": "Machine Group, SALES MODEL, Region", "Sort": "CCR Display Order ascending", "Purpose": "Analyze region costs by rebuild type while allowing machine selection."},
+        {"Page": "Dealer Performance", "Section": "Dealer Cost Ranking", "Visual Type": "Bar chart", "Primary Table": "Fact_Dealer_Performance", "Fields": "DEALER, Dealer Code, SALES MODEL, Avg_Cost, Performance Score", "Filters": "Machine Group, SALES MODEL, Region, Dealer", "Sort": "Avg_Cost descending or Performance Score ascending", "Purpose": "Identify dealers with high cost or review-needed performance."},
+        {"Page": "Exceptions & Data Quality", "Section": "Exception Summary", "Visual Type": "Cards and bar chart", "Primary Table": "Fact_Exception_Rows", "Fields": "Exception Type, Exception Detail, Cost", "Filters": "Machine Group, SALES MODEL, Region, CCR TYPE", "Sort": "Exception count descending", "Purpose": "Summarize rows requiring review."},
+        {"Page": "Exceptions & Data Quality", "Section": "Cross-Type Outlier Audit", "Visual Type": "Table", "Primary Table": "Fact_CrossType_Outliers", "Fields": "SALES MODEL, Region, Dealer Code, CCR TYPE, CMR Benchmark Cost, Cross-Type Threshold Cost, Outlier Reason", "Filters": "SALES MODEL, Region, Dealer", "Sort": "Cost descending", "Purpose": "Audit CPT+H rows excluded by the cross-type outlier rule."},
+        {"Page": "Handoff / Documentation", "Section": "Data Model", "Visual Type": "Table", "Primary Table": "PowerBI_Table_Dictionary", "Fields": "Table Name, Grain, Purpose, Key Fields", "Filters": "Not applicable", "Sort": "Table Name ascending", "Purpose": "Explain table purpose and grain for future maintainers."},
+        {"Page": "Handoff / Documentation", "Section": "Pipeline", "Visual Type": "Table", "Primary Table": "PowerBI_Pipeline_Guide", "Fields": "Step, Action, Expected Result", "Filters": "Not applicable", "Sort": "Step ascending", "Purpose": "Document the SharePoint/OneDrive refresh workflow."},
     ])
 
+
+def build_powerbi_sheet_name_map():
+    rows = []
+    for table_name in POWERBI_FULL_EXPORT_TABLES + ["Scenario_Comparison"]:
+        excel_name = POWERBI_SHEET_NAME_MAP.get(table_name, safe_sheet_name(table_name))
+        rows.append({
+            "Logical Table Name": table_name,
+            "Excel Sheet Name": excel_name,
+            "Logical Name Length": len(table_name),
+            "Excel Sheet Name Length": len(excel_name),
+            "Name Shortened": excel_name != table_name,
+            "Reason": "Excel worksheet names are limited to 31 characters" if excel_name != table_name else "No shortening required",
+            "Use In Power BI": "Load this worksheet and rename the query/table to the logical table name if desired",
+        })
+    return pd.DataFrame(rows).drop_duplicates("Logical Table Name")
+
+
+def build_powerbi_pipeline_guide():
+    return pd.DataFrame([
+        {"Step": 1, "Action": "Run analysis in the app", "Expected Result": "Analysis completes and Power BI Dataset Export is available", "Owner": "App user / analyst", "Notes": "Review data quality and exceptions before export."},
+        {"Step": 2, "Action": "Download Power BI Dataset Export", "Expected Result": "Clean Excel workbook with one table per worksheet", "Owner": "App user / analyst", "Notes": "Every sheet uses row 1 as the header row."},
+        {"Step": 3, "Action": "Rename export to Rebuild_Analytics_PowerBI_Dataset.xlsx", "Expected Result": "Stable file name for Power BI source", "Owner": "App user / analyst", "Notes": "Do not add dates or version suffixes to the source file name."},
+        {"Step": 4, "Action": "Replace the existing file in the approved SharePoint/OneDrive source folder", "Expected Result": "Power BI source file path remains unchanged", "Owner": "Data owner", "Notes": "Archive prior versions separately."},
+        {"Step": 5, "Action": "Open Power BI Desktop report", "Expected Result": "Report opens with existing data model", "Owner": "Power BI owner", "Notes": "Do not rebuild queries unless table structure changes."},
+        {"Step": 6, "Action": "Refresh the Power BI model", "Expected Result": "Tables refresh from the replaced workbook", "Owner": "Power BI owner", "Notes": "Use PowerBI_Relationship_Checks if slicers or relationships behave unexpectedly."},
+        {"Step": 7, "Action": "Validate key pages", "Expected Result": "Executive, Machine, Region, Dealer, and Exceptions pages update correctly", "Owner": "Power BI owner", "Notes": "Check machine slicers against Fact_MachineRegion_RebuildType_AvgCost."},
+        {"Step": 8, "Action": "Publish or refresh in Power BI Service if licensing/workspace access allows", "Expected Result": "Shared report reflects latest approved dataset", "Owner": "Power BI owner / workspace owner", "Notes": "Sharing may require Pro/PPU or Premium/Fabric capacity depending on workspace setup."},
+    ])
+
+
+def build_powerbi_build_checklist():
+    return pd.DataFrame([
+        {"Order": 1, "Task": "Load all Power BI export worksheets", "Status Target": "Complete", "Validation": "All listed sheets load without promoted-header fixes", "Notes": "Headers should already be row 1."},
+        {"Order": 2, "Task": "Rename shortened queries if desired", "Status Target": "Optional", "Validation": "Power BI query/table names match logical names in PowerBI_Sheet_Name_Map", "Notes": "Short worksheet names are only for Excel compatibility."},
+        {"Order": 3, "Task": "Create/confirm core relationships", "Status Target": "Complete", "Validation": "Use Relationship_Guide and PowerBI_Relationship_Checks", "Notes": "Prefer many-to-one, single direction, active."},
+        {"Order": 4, "Task": "Confirm dimension key uniqueness", "Status Target": "Complete", "Validation": "PowerBI_Relationship_Checks shows no duplicate dimension keys", "Notes": "Fix duplicates before creating many-to-many relationships."},
+        {"Order": 5, "Task": "Create starter DAX measures", "Status Target": "Complete", "Validation": "Measures from DAX_Starter exist with recommended formatting", "Notes": "Review cost column name in Average Cost measure."},
+        {"Order": 6, "Task": "Sort CCR Display by CCR Display Order", "Status Target": "Complete", "Validation": "CMR, CPT+H, CPT-O appear in business order", "Notes": "Apply sort-by-column where supported."},
+        {"Order": 7, "Task": "Build Executive Overview page", "Status Target": "Complete", "Validation": "Cards and rebuild-type charts align with app summary", "Notes": "Use reported averages after outlier exclusions."},
+        {"Order": 8, "Task": "Build Machine Detail page", "Status Target": "Complete", "Validation": "SALES MODEL slicer filters machine and region breakdown visuals", "Notes": "Use Fact_MachineRegion_RebuildType_AvgCost for region charts."},
+        {"Order": 9, "Task": "Build Region Performance page", "Status Target": "Complete", "Validation": "Machine and region slicers affect charts", "Notes": "Use Dim_Machine and Dim_Region slicers."},
+        {"Order": 10, "Task": "Build Dealer Performance page", "Status Target": "Complete", "Validation": "Dealer visuals respond to machine/region filters", "Notes": "Use Fact_Dealer_Performance."},
+        {"Order": 11, "Task": "Build Exceptions & Data Quality page", "Status Target": "Complete", "Validation": "Outlier and cross-type audit tables reconcile to cards", "Notes": "Use Fact_CrossType_Outliers for CPT+H rule audit."},
+        {"Order": 12, "Task": "Test source-file replacement refresh", "Status Target": "Complete", "Validation": "Replacing the fixed workbook and refreshing updates visuals", "Notes": "This validates the Level 2 pipeline."},
+    ])
+
+
+def build_powerbi_dax_starter(cost_col):
+    return pd.DataFrame([
+        {"Page": "All", "Measure Name": "Average Cost", "DAX Expression": f"Average Cost = AVERAGE(Fact_Rebuild_Rows[{cost_col}])", "Format": "Currency, 0 decimals", "Recommended Visual": "Card / bar chart value", "Business Meaning": "Average analysis cost in the current filter context."},
+        {"Page": "All", "Measure Name": "Valid Rows", "DAX Expression": "Valid Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = FALSE())", "Format": "Whole number", "Recommended Visual": "Card", "Business Meaning": "Rows included in reported averages."},
+        {"Page": "All", "Measure Name": "Total Rows", "DAX Expression": "Total Rows = COUNTROWS(Fact_Rebuild_Rows)", "Format": "Whole number", "Recommended Visual": "Card", "Business Meaning": "Processed rows after app filters."},
+        {"Page": "Exceptions & Data Quality", "Measure Name": "Outlier Rows", "DAX Expression": "Outlier Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = TRUE())", "Format": "Whole number", "Recommended Visual": "Card", "Business Meaning": "Rows excluded by statistical or cross-type outlier rules."},
+        {"Page": "Exceptions & Data Quality", "Measure Name": "Outlier Rate %", "DAX Expression": "Outlier Rate % = DIVIDE([Outlier Rows], [Total Rows])", "Format": "Percentage, 1 decimal", "Recommended Visual": "Card / KPI", "Business Meaning": "Share of processed rows excluded as outliers."},
+        {"Page": "Exceptions & Data Quality", "Measure Name": "Statistical Cost Outliers", "DAX Expression": "Statistical Cost Outliers = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Statistical Cost Outlier Flag] = TRUE())", "Format": "Whole number", "Recommended Visual": "Card", "Business Meaning": "Rows excluded by log-cost IQR methodology."},
+        {"Page": "Exceptions & Data Quality", "Measure Name": "Cross-Type Outliers", "DAX Expression": "Cross-Type Outliers = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Cross-Type Outlier Flag] = TRUE())", "Format": "Whole number", "Recommended Visual": "Card", "Business Meaning": "CPT+H rows excluded by machine-level CMR benchmark rule."},
+        {"Page": "Dealer Performance", "Measure Name": "Dealer Rate Exceptions", "DAX Expression": "Dealer Rate Exceptions = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Dealer Rate Exception Flag] <> \"\")", "Format": "Whole number", "Recommended Visual": "Card / table", "Business Meaning": "Rows using fallback or missing dealer-year rate logic."},
+        {"Page": "Machine Detail", "Measure Name": "Average SMU", "DAX Expression": "Average SMU = AVERAGE(Fact_Rebuild_Rows[SMU AT REBUILD])", "Format": "Whole number", "Recommended Visual": "Card / scatter plot", "Business Meaning": "Average service meter units in selected context."},
+        {"Page": "Region Performance", "Measure Name": "Selected Machine Region Avg Cost", "DAX Expression": "Selected Machine Region Avg Cost = AVERAGE(Fact_MachRegion_RT_AvgCost[Avg_Cost])", "Format": "Currency, 0 decimals", "Recommended Visual": "Small multiples / matrix", "Business Meaning": "Average rebuild-type cost by selected machine and region using the machine-region summary table."},
+    ])
+
+def build_powerbi_table_dictionary():
+    """Business-friendly dictionary for every Power BI export table, including grain."""
+    return pd.DataFrame([
+        {"Table Name": "Fact_Rebuild_Rows", "Excel Sheet Name": "Fact_Rebuild_Rows", "Grain": "One row per processed rebuild source record", "Purpose": "Primary processed row table with costs, rates, FX, CPI, data-quality flags, and outlier flags.", "Typical Power BI Use": "Main row-level fact table for measures, slicers, drill-through, and exception context.", "Key Fields": "Run ID, SALES MODEL, Machine Group, Dealer Code, Region, CCR TYPE, cost columns, Outlier, Outlier Rule Type"},
+        {"Table Name": "Fact_Valid_Rebuild_Rows", "Excel Sheet Name": "Fact_Valid_Rebuild_Rows", "Grain": "One row per non-outlier rebuild record", "Purpose": "Rows that remain after statistical and cross-type outlier exclusions.", "Typical Power BI Use": "Use when visuals should match app-reported averages exactly.", "Key Fields": "Run ID, SALES MODEL, Region, CCR TYPE, cost columns, SMU AT REBUILD"},
+        {"Table Name": "Fact_Global_RebuildType_AvgCost", "Excel Sheet Name": POWERBI_SHEET_NAME_MAP.get("Fact_Global_RebuildType_AvgCost", "Fact_Global_RebuildType_AvgCost"), "Grain": "One row per Run ID + CCR TYPE", "Purpose": "Global average cost by rebuild type after exclusions.", "Typical Power BI Use": "Executive rebuild-type average cost charts.", "Key Fields": "CCR Display, CCR Display Order, Avg_Cost, Count, Total Outliers Excluded"},
+        {"Table Name": "Fact_Region_RebuildType_AvgCost", "Excel Sheet Name": POWERBI_SHEET_NAME_MAP.get("Fact_Region_RebuildType_AvgCost", "Fact_Region_RebuildType_AvgCost"), "Grain": "One row per Run ID + Region + CCR TYPE", "Purpose": "Regional average cost by rebuild type after exclusions.", "Typical Power BI Use": "Region rebuild-type comparison; use machine-region table when machine slicers are required.", "Key Fields": "Region, CCR Display, Avg_Cost, Count"},
+        {"Table Name": "Fact_Machine_RebuildType_AvgCost", "Excel Sheet Name": POWERBI_SHEET_NAME_MAP.get("Fact_Machine_RebuildType_AvgCost", "Fact_Machine_RebuildType_AvgCost"), "Grain": "One row per Run ID + SALES MODEL + CCR TYPE", "Purpose": "Machine average cost by rebuild type after exclusions.", "Typical Power BI Use": "Machine detail rebuild-type charts.", "Key Fields": "SALES MODEL, CCR Display, Avg_Cost, Vs Machine CMR %, Count"},
+        {"Table Name": "Fact_MachineGroup_RebuildType_AvgCost", "Excel Sheet Name": POWERBI_SHEET_NAME_MAP.get("Fact_MachineGroup_RebuildType_AvgCost", "Fact_MachineGroup_RebuildType_AvgCost"), "Grain": "One row per Run ID + Machine Group + CCR TYPE", "Purpose": "Machine group/family average cost by rebuild type.", "Typical Power BI Use": "Machine group comparison charts.", "Key Fields": "Machine Group, CCR Display, Avg_Cost, Count"},
+        {"Table Name": "Fact_MachineRegion_RebuildType_AvgCost", "Excel Sheet Name": POWERBI_SHEET_NAME_MAP.get("Fact_MachineRegion_RebuildType_AvgCost", "Fact_MachineRegion_RebuildType_AvgCost"), "Grain": "One row per Run ID + SALES MODEL + Region + CCR TYPE", "Purpose": "Machine-region average cost by rebuild type so region charts respond to machine slicers.", "Typical Power BI Use": "Machine detail region charts and region drill-through pages.", "Key Fields": "SALES MODEL, Region, CCR Display, Avg_Cost, Count"},
+        {"Table Name": "Fact_Machine_Insights", "Excel Sheet Name": "Fact_Machine_Insights", "Grain": "One row per generated machine insight", "Purpose": "Machine-level narrative insights in table form.", "Typical Power BI Use": "Insight cards/tables and drill-through notes.", "Key Fields": "SALES MODEL, Insight Category, Insight Text, Metric Name, Priority"},
+        {"Table Name": "Fact_Machine_Ranking", "Excel Sheet Name": "Fact_Machine_Ranking", "Grain": "One row per Run ID + SALES MODEL", "Purpose": "Machine ranking and priority scoring output.", "Typical Power BI Use": "Executive ranking tables and priority-score visuals.", "Key Fields": "SALES MODEL, Avg_Cost, Priority Score, Priority Label"},
+        {"Table Name": "Fact_Dealer_Performance", "Excel Sheet Name": "Fact_Dealer_Performance", "Grain": "One row per Run ID + SALES MODEL + Dealer Code + Region", "Purpose": "Dealer-level performance scoring and cost position metrics.", "Typical Power BI Use": "Dealer scorecards and review-needed dealer lists.", "Key Fields": "Dealer Code, DEALER, SALES MODEL, Avg_Cost, Performance Score"},
+        {"Table Name": "Fact_Region_Performance", "Excel Sheet Name": "Fact_Region_Performance", "Grain": "One row per Run ID + SALES MODEL + Region", "Purpose": "Region-level performance summary by machine.", "Typical Power BI Use": "Region scorecards and machine-filtered region pages.", "Key Fields": "SALES MODEL, Region, Avg_Cost, Count, Outlier Rate %"},
+        {"Table Name": "Fact_Exception_Rows", "Excel Sheet Name": "Fact_Exception_Rows", "Grain": "One row per exception event; one source record may appear multiple times", "Purpose": "Unified exception table for outliers, data quality, dealer rate exceptions, and FX fallback.", "Typical Power BI Use": "Exception review page and drill-through table.", "Key Fields": "Exception Type, Exception Detail, SALES MODEL, Region, Cost"},
+        {"Table Name": "Fact_Outlier_Rows", "Excel Sheet Name": "Fact_Outlier_Rows", "Grain": "One row per row excluded as an outlier", "Purpose": "Audit table for all excluded statistical and cross-type outlier rows.", "Typical Power BI Use": "Outlier audit page.", "Key Fields": "SALES MODEL, CCR TYPE, Outlier Rule Type, Outlier Reason"},
+        {"Table Name": "Fact_CrossType_Outliers", "Excel Sheet Name": "Fact_CrossType_Outliers", "Grain": "One row per CPT+H row excluded by cross-type rule", "Purpose": "Audit table for CPT+H rows above the machine-level CMR benchmark.", "Typical Power BI Use": "Cross-type outlier audit page.", "Key Fields": "SALES MODEL, CCR TYPE, CMR Benchmark Cost, Cross-Type Threshold Cost"},
+        {"Table Name": "Dim_Machine", "Excel Sheet Name": "Dim_Machine", "Grain": "One row per machine model", "Purpose": "Machine model and grouping lookup.", "Typical Power BI Use": "Machine and model slicers.", "Key Fields": "SALES MODEL, Machine Group, Machine Family, Machine Category"},
+        {"Table Name": "Dim_Machine_Group", "Excel Sheet Name": "Dim_Machine_Group", "Grain": "One row per Machine Group", "Purpose": "Clean machine-group lookup to avoid non-unique Machine Group relationships.", "Typical Power BI Use": "Machine group slicers and group-level summary visuals.", "Key Fields": "Machine Group, Machine Family, Machine Category, Machine Count"},
+        {"Table Name": "Dim_Dealer", "Excel Sheet Name": "Dim_Dealer", "Grain": "One row per dealer/region row", "Purpose": "Dealer and region lookup table.", "Typical Power BI Use": "Dealer slicers and dealer pages.", "Key Fields": "Dealer Code, DEALER, Region"},
+        {"Table Name": "Dim_Rebuild_Type", "Excel Sheet Name": "Dim_Rebuild_Type", "Grain": "One row per rebuild type", "Purpose": "Certified rebuild type reference table.", "Typical Power BI Use": "Rebuild type slicers and descriptions.", "Key Fields": "CCR TYPE, Rebuild Description"},
+        {"Table Name": "Dim_Region", "Excel Sheet Name": "Dim_Region", "Grain": "One row per configured region", "Purpose": "Configured region reference table.", "Typical Power BI Use": "Region slicers and region charts.", "Key Fields": "Region, Configured Region Flag"},
+        {"Table Name": "Dim_Service_Year", "Excel Sheet Name": "Dim_Service_Year", "Grain": "One row per service year", "Purpose": "Service year dimension.", "Typical Power BI Use": "Year slicers and trend visuals.", "Key Fields": "Service Year, Year, Year Label"},
+        {"Table Name": "PowerBI_Relationship_Checks", "Excel Sheet Name": "PowerBI_Relationship_Checks", "Grain": "One row per suggested relationship", "Purpose": "Pre-check relationship readiness, unmatched keys, and duplicate dimension keys.", "Typical Power BI Use": "Troubleshooting model relationships.", "Key Fields": "Relationship, Status, Recommendation"},
+        {"Table Name": "PowerBI_Sheet_Name_Map", "Excel Sheet Name": "PowerBI_Sheet_Name_Map", "Grain": "One row per exported logical table", "Purpose": "Map logical table names to Excel worksheet names.", "Typical Power BI Use": "Rename imported queries/tables consistently.", "Key Fields": "Logical Table Name, Excel Sheet Name, Name Shortened"},
+        {"Table Name": "PowerBI_Pipeline_Guide", "Excel Sheet Name": "PowerBI_Pipeline_Guide", "Grain": "One row per pipeline step", "Purpose": "Document the SharePoint/OneDrive Level 2 Power BI source-file workflow.", "Typical Power BI Use": "Handoff and refresh process documentation.", "Key Fields": "Step, Action, Expected Result, Owner"},
+        {"Table Name": "PowerBI_Build_Checklist", "Excel Sheet Name": "PowerBI_Build_Checklist", "Grain": "One row per report build/test task", "Purpose": "Checklist for building and validating the Power BI report.", "Typical Power BI Use": "Report build QA and handoff.", "Key Fields": "Order, Task, Validation, Notes"},
+        {"Table Name": "DAX_Starter", "Excel Sheet Name": "DAX_Starter", "Grain": "One row per starter measure", "Purpose": "Starter DAX measures with page, format, visual, and business meaning.", "Typical Power BI Use": "Create consistent initial measures.", "Key Fields": "Page, Measure Name, DAX Expression, Format"},
+        {"Table Name": "PowerBI_Report_Layout", "Excel Sheet Name": "PowerBI_Report_Layout", "Grain": "One row per recommended visual/section", "Purpose": "Detailed page-layout template for Power BI report building.", "Typical Power BI Use": "Report design blueprint.", "Key Fields": "Page, Section, Visual Type, Primary Table, Fields"},
+    ])
 
 def build_export_mode_dictionary():
     return pd.DataFrame([
@@ -2286,6 +2360,82 @@ def build_powerbi_region_performance(valid_df, processed_df, cost_col, run_id, s
     return _add_run_columns(out, run_id, scenario_name_value)
 
 
+
+def build_dim_machine_group(processed_df, run_id, scenario_label):
+    cols = [c for c in ["Machine Group", "Machine Family", "Machine Category", "Machine Group Source", "Machine Group Notes"] if c in processed_df.columns]
+    if not cols or "Machine Group" not in cols:
+        return pd.DataFrame(columns=["Run ID", "Scenario Name", "Machine Group", "Machine Family", "Machine Category", "Machine Group Source", "Machine Group Notes"])
+    temp = processed_df[cols].copy()
+    temp = temp[temp["Machine Group"].astype(str).str.strip() != ""]
+    if temp.empty:
+        return _add_run_columns(temp, run_id, scenario_label)
+    # One row per Machine Group to act as a clean slicer/reference dimension.
+    agg_map = {col: (lambda x: next((str(v) for v in x.dropna().astype(str).unique() if str(v).strip()), "")) for col in cols if col != "Machine Group"}
+    out = temp.groupby("Machine Group", dropna=False).agg(agg_map).reset_index()
+    out["Machine Count"] = processed_df.groupby("Machine Group")["SALES MODEL"].nunique().reindex(out["Machine Group"]).fillna(0).astype(int).values if "SALES MODEL" in processed_df.columns else 0
+    return _add_run_columns(out.sort_values("Machine Group"), run_id, scenario_label)
+
+
+def build_powerbi_relationship_checks(tables, relationship_guide):
+    rows = []
+    for _, rel in relationship_guide.iterrows():
+        fact_table = rel.get("From Table", "")
+        fact_col = rel.get("From Column", "")
+        dim_table = rel.get("To Table", "")
+        dim_col = rel.get("To Column", "")
+        fact = tables.get(fact_table, pd.DataFrame())
+        dim = tables.get(dim_table, pd.DataFrame())
+        status = "Ready"
+        rec_notes = []
+        fact_col_exists = isinstance(fact, pd.DataFrame) and fact_col in fact.columns
+        dim_col_exists = isinstance(dim, pd.DataFrame) and dim_col in dim.columns
+        fact_blank = dim_dup = unmatched = 0
+        fact_rows = len(fact) if isinstance(fact, pd.DataFrame) else 0
+        dim_rows = len(dim) if isinstance(dim, pd.DataFrame) else 0
+        if not fact_col_exists:
+            status = "Not Ready"
+            rec_notes.append("Fact/source column missing")
+        if not dim_col_exists:
+            status = "Not Ready"
+            rec_notes.append("Dimension/lookup column missing")
+        if fact_col_exists and dim_col_exists:
+            fact_vals = fact[fact_col]
+            dim_vals = dim[dim_col]
+            fact_blank = int(fact_vals.isna().sum() + (fact_vals.astype(str).str.strip() == "").sum())
+            dim_dup = int(dim_vals.astype(str).str.strip().duplicated().sum())
+            fact_clean = set(fact_vals.dropna().astype(str).str.strip()) - {""}
+            dim_clean = set(dim_vals.dropna().astype(str).str.strip()) - {""}
+            unmatched = len(fact_clean - dim_clean)
+            if dim_dup > 0:
+                status = "Not Ready"
+                rec_notes.append("Dimension key is not unique")
+            if unmatched > 0 and status == "Ready":
+                status = "Needs Review"
+                rec_notes.append("Fact has keys not found in dimension")
+            if fact_blank > 0 and status == "Ready":
+                status = "Needs Review"
+                rec_notes.append("Fact has blank relationship keys")
+        rows.append({
+            "Relationship": f"{fact_table}[{fact_col}] -> {dim_table}[{dim_col}]",
+            "Fact Table": fact_table,
+            "Fact Column": fact_col,
+            "Dimension Table": dim_table,
+            "Dimension Column": dim_col,
+            "Fact Rows": fact_rows,
+            "Dimension Rows": dim_rows,
+            "Fact Column Exists": fact_col_exists,
+            "Dimension Column Exists": dim_col_exists,
+            "Fact Blank Key Count": fact_blank,
+            "Dimension Duplicate Key Count": dim_dup,
+            "Fact Unmatched Key Count": unmatched,
+            "Cardinality": rel.get("Cardinality", "Many-to-one (*:1)"),
+            "Cross Filter Direction": rel.get("Cross Filter Direction", "Single"),
+            "Active": rel.get("Active", "Yes"),
+            "Status": status,
+            "Recommendation": "; ".join(rec_notes) if rec_notes else "Ready to create relationship",
+        })
+    return pd.DataFrame(rows)
+
 def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_value, export_mode_value):
     """Build the single full detailed Power BI export. Row 1 is always headers in the writer."""
     processed_df = analysis["df"].copy()
@@ -2300,6 +2450,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     machine_dim_cols = [c for c in ["SALES MODEL", "Machine Group", "Machine Family", "Machine Category", "Machine Group Source", "Machine Group Notes"] if c in processed_df.columns]
     dim_machine = processed_df[machine_dim_cols].drop_duplicates().sort_values("SALES MODEL").reset_index(drop=True) if machine_dim_cols else pd.DataFrame()
     dim_machine = _add_run_columns(dim_machine, run_id, scenario_label)
+    dim_machine_group = build_dim_machine_group(processed_df, run_id, scenario_label)
 
     dealer_cols = [c for c in ["Dealer Code", "DEALER", "Region"] if c in processed_df.columns]
     dim_dealer = processed_df[dealer_cols].drop_duplicates().sort_values(dealer_cols).reset_index(drop=True) if dealer_cols else pd.DataFrame()
@@ -2338,20 +2489,43 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     machine_insights_export = _add_run_columns(analysis.get("machine_insights", pd.DataFrame()).copy(), run_id, scenario_label)
 
     run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
-    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V18.0 Full Detailed Power BI Export", "Power BI is the primary output. All sheets are clean tables with headers on row 1. Long logical table names use shortened Excel sheet names where needed due to Excel sheet-name limits. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
+    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V18.1 Full Detailed Power BI Model Export", "Power BI is the primary output. All sheets are clean tables with headers on row 1. Long logical table names use shortened Excel sheet names where needed due to Excel sheet-name limits. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
     run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
 
     relationship_guide = pd.DataFrame({
-        "From Table": ["Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Machine_RebuildType_AvgCost", "Fact_MachineRegion_RebuildType_AvgCost", "Fact_MachineRegion_RebuildType_AvgCost", "Fact_Dealer_Performance", "Fact_Region_Performance", "Fact_Exception_Rows", "Fact_CrossType_Outliers"],
-        "From Column": ["SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year", "SALES MODEL", "SALES MODEL", "Region", "Dealer Code", "Region", "SALES MODEL", "SALES MODEL"],
-        "To Table": ["Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year", "Dim_Machine", "Dim_Machine", "Dim_Region", "Dim_Dealer", "Dim_Region", "Dim_Machine", "Dim_Machine"],
-        "To Column": ["SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year", "SALES MODEL", "SALES MODEL", "Region", "Dealer Code", "Region", "SALES MODEL", "SALES MODEL"],
-        "Cardinality": ["Many-to-one (*:1)"] * 12,
-        "Cross Filter Direction": ["Single"] * 12,
-        "Active": ["Yes"] * 12,
-        "Relationship Notes": ["Dimension filters fact; keep single direction."] * 12,
+        "From Table": [
+            "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows", "Fact_Rebuild_Rows",
+            "Fact_Machine_RebuildType_AvgCost", "Fact_MachineRegion_RebuildType_AvgCost", "Fact_MachineRegion_RebuildType_AvgCost",
+            "Fact_MachineGroup_RebuildType_AvgCost", "Fact_Dealer_Performance", "Fact_Region_Performance",
+            "Fact_Exception_Rows", "Fact_CrossType_Outliers", "Dim_Machine", "Fact_Rebuild_Rows"
+        ],
+        "From Column": [
+            "SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year",
+            "SALES MODEL", "SALES MODEL", "Region", "Machine Group", "Dealer Code", "Region",
+            "SALES MODEL", "SALES MODEL", "Machine Group", "Machine Group"
+        ],
+        "To Table": [
+            "Dim_Machine", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
+            "Dim_Machine", "Dim_Machine", "Dim_Region", "Dim_Machine_Group", "Dim_Dealer", "Dim_Region",
+            "Dim_Machine", "Dim_Machine", "Dim_Machine_Group", "Dim_Machine_Group"
+        ],
+        "To Column": [
+            "SALES MODEL", "Dealer Code", "CCR TYPE", "Region", "Service Year",
+            "SALES MODEL", "SALES MODEL", "Region", "Machine Group", "Dealer Code", "Region",
+            "SALES MODEL", "SALES MODEL", "Machine Group", "Machine Group"
+        ],
+        "Cardinality": ["Many-to-one (*:1)"] * 15,
+        "Cross Filter Direction": ["Single"] * 15,
+        "Active": ["Yes"] * 15,
+        "Relationship Notes": [
+            "Core row-level machine relationship", "Core row-level dealer relationship", "Core row-level rebuild type relationship", "Core row-level region relationship", "Core service-year relationship",
+            "Machine detail average table relationship", "Machine-region table responds to machine slicers", "Machine-region table responds to region slicers",
+            "Group summary table relates to one-row-per-group dimension", "Dealer performance table relationship", "Region performance table relationship",
+            "Exception table drill-through relationship", "Cross-type outlier audit relationship", "Optional dimension-to-dimension group relationship", "Optional direct machine-group slicer relationship"
+        ]
     })
-    dax_starter = pd.DataFrame({"Measure Name": ["Average Cost", "Valid Rows", "Total Rows", "Outlier Rows", "Outlier Rate %", "Cross-Type Outliers", "Dealer Rate Exceptions", "Average SMU"], "DAX Expression": [f"Average Cost = AVERAGE(Fact_Rebuild_Rows[{cost_col}])", "Valid Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = FALSE())", "Total Rows = COUNTROWS(Fact_Rebuild_Rows)", "Outlier Rows = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Outlier] = TRUE())", "Outlier Rate % = DIVIDE([Outlier Rows], [Total Rows])", "Cross-Type Outliers = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Cross-Type Outlier Flag] = TRUE())", "Dealer Rate Exceptions = CALCULATE(COUNTROWS(Fact_Rebuild_Rows), Fact_Rebuild_Rows[Dealer Rate Exception Flag] <> \"\")", "Average SMU = AVERAGE(Fact_Rebuild_Rows[SMU AT REBUILD])"]})
+    dax_starter = build_powerbi_dax_starter(cost_col)
+
 
     tables = {
         "Fact_Rebuild_Rows": fact_rebuild,
@@ -2372,6 +2546,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Fact_Data_Quality": fact_data_quality,
         "DataQuality_Summary": data_quality_summary,
         "Dim_Machine": dim_machine,
+        "Dim_Machine_Group": dim_machine_group,
         "Dim_Dealer": dim_dealer,
         "Dim_Rebuild_Type": dim_rebuild_type,
         "Dim_Region": dim_region,
@@ -2380,10 +2555,14 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Run_Metadata": _clean_powerbi_columns(run_metadata),
         "Filter_Summary": _add_run_columns(analysis.get("filter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
         "Relationship_Guide": relationship_guide,
+        "PowerBI_Relationship_Checks": pd.DataFrame(),
         "DAX_Starter": dax_starter,
         "PowerBI_Instructions": build_powerbi_instructions_table(),
         "PowerBI_Report_Layout": build_powerbi_report_layout_table(),
         "PowerBI_Table_Dictionary": build_powerbi_table_dictionary(),
+        "PowerBI_Sheet_Name_Map": build_powerbi_sheet_name_map(),
+        "PowerBI_Pipeline_Guide": build_powerbi_pipeline_guide(),
+        "PowerBI_Build_Checklist": build_powerbi_build_checklist(),
         "Export_Mode_Dictionary": build_export_mode_dictionary(),
         "Required_Files": build_required_files_checklist(),
         "Testing_Checklist": build_testing_checklist(),
@@ -2393,6 +2572,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
         "Scenario_Comparison": build_scenario_comparison_table(analysis, run_id, scenario_label),
     }
+    tables["PowerBI_Relationship_Checks"] = build_powerbi_relationship_checks(tables, relationship_guide)
     preview = build_powerbi_export_preview(tables, list(tables.keys()))
     readiness = build_powerbi_readiness_score(preview)
     tables["PowerBI_Readiness"] = pd.concat([readiness.assign(Section="Score"), preview.assign(Section="Table Check")], ignore_index=True, sort=False)
@@ -2616,7 +2796,7 @@ st.subheader("Export Controls")
 export_mode = st.selectbox("Export mode", ["Power BI Dataset Export", "Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Scenario Archive Package"], index=0)
 powerbi_selected_tables = POWERBI_FULL_EXPORT_TABLES.copy()
 if export_mode in ["Power BI Dataset Export", "Scenario Archive Package"]:
-    st.info("Power BI is the primary output. The app now produces one full detailed Power BI export with all required fact, dimension, audit, relationship, DAX, and handoff tables. Row 1 is always the header row on every exported sheet.")
+    st.info("Power BI is the primary output. The app now produces one full detailed Power BI export with all required fact, dimension, audit, relationship-check, sheet-map, DAX, report-layout, pipeline, build-checklist, and handoff tables. Row 1 is always the header row on every exported sheet.")
 
 export_reason = st.selectbox("Export reason", ["Manager review", "Dealer review", "Cost benchmarking", "Data validation", "Presentation support", "Other"], index=0)
 export_reason_other = ""
