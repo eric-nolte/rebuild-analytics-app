@@ -15,13 +15,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V18.1"
-APP_LAST_UPDATED = "2026-07-08"
+APP_VERSION = "V18.2"
+APP_LAST_UPDATED = "2026-07-09"
 METHODOLOGY_VERSION = "2026.07-PowerBI-CrossType-Outlier-v18"
 OUTLIER_RULE_VERSION = "Cost Log-IQR + CPT+H Cross-Type Outlier by Machine"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V18.1 Power BI Model Handoff Upgrade"
+EXPORT_FORMAT_VERSION = "V18.2 Power BI Visual Coverage Matrix Upgrade"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -35,7 +35,7 @@ POWERBI_FULL_EXPORT_TABLES = [
     "Fact_Rate_Coverage", "Fact_Data_Quality", "DataQuality_Summary",
     "Dim_Machine", "Dim_Machine_Group", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
     "Machine_Grouping", "Run_Metadata", "Filter_Summary", "Relationship_Guide", "PowerBI_Relationship_Checks",
-    "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary",
+    "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Visual_Coverage_Matrix", "PowerBI_Table_Dictionary",
     "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist",
     "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process",
     "Known_Limitations", "Data_Dictionary", "Parameters", "PowerBI_Readiness"
@@ -868,7 +868,7 @@ def build_powerbi_export_preview(tables, selected_tables=None):
         cols = [str(c) for c in table.columns]
         blank_cols = sum(1 for c in cols if c.strip() == "" or c.startswith("Unnamed"))
         dup_cols = len(cols) - len(set(cols))
-        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "PowerBI_Relationship_Checks", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Table_Dictionary", "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
+        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "PowerBI_Relationship_Checks", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Visual_Coverage_Matrix", "PowerBI_Table_Dictionary", "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
         marker_rows = 0
         if not table.empty:
             first_col = table.columns[0]
@@ -951,7 +951,7 @@ def build_powerbi_instructions_table():
             "Use Relationship_Guide and PowerBI_Relationship_Checks to create and validate model relationships.",
             "Use Dim_Machine_Group for clean machine-group slicers and group-level views.",
             "Use DAX_Starter to create initial measures and apply the recommended formats.",
-            "Use PowerBI_Report_Layout and PowerBI_Build_Checklist to build and test report pages.",
+            "Use PowerBI_Report_Layout, PowerBI_Visual_Coverage_Matrix, and PowerBI_Build_Checklist to build and test report pages.",
             "After replacing the source workbook, refresh Power BI Desktop and validate slicers, totals, and exception pages."
         ],
         "Notes": [
@@ -963,7 +963,7 @@ def build_powerbi_instructions_table():
             "Recommended relationships are active, many-to-one, and single-direction unless the guide marks a relationship optional.",
             "Dim_Machine_Group has one row per Machine Group and avoids many-to-many behavior when slicing by group.",
             "Review cost column references if inflation is disabled or methodology changes.",
-            "Build pages in order: Executive, Machine Detail, Region, Dealer, Exceptions, Handoff.",
+            "Build pages in order: Executive, Machine Detail, Region, Dealer, Exceptions, Handoff; use the coverage matrix to confirm every app output has a Power BI path.",
             "Archive scenario packages separately from the fixed Power BI source workbook."
         ]
     })
@@ -985,6 +985,46 @@ def build_powerbi_report_layout_table():
         {"Page": "Handoff / Documentation", "Section": "Pipeline", "Visual Type": "Table", "Primary Table": "PowerBI_Pipeline_Guide", "Fields": "Step, Action, Expected Result", "Filters": "Not applicable", "Sort": "Step ascending", "Purpose": "Document the SharePoint/OneDrive refresh workflow."},
     ])
 
+
+
+def build_powerbi_visual_coverage_matrix():
+    """Map every app-presented analytical visual/table to a Power BI build path."""
+    rows = [
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Run Summary", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "Run_Metadata", "Supporting Tables": "Parameters, Filter_Summary", "Fields Needed": "Field, Value", "Recommended Slicers": "Run ID, Scenario Name", "Recommended Sort": "Source order", "Coverage Status": "Covered", "Notes": "Use as report footer, audit panel, or documentation page."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Active Filter Summary", "Power BI Page": "Executive Overview", "Power BI Visual Type": "Table or cards", "Primary Export Table": "Filter_Summary", "Supporting Tables": "Parameters", "Fields Needed": "Filter, Value", "Recommended Slicers": "Run ID", "Recommended Sort": "Source order", "Coverage Status": "Covered", "Notes": "Shows scenario filters used to create the export."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Run Readiness Check", "Power BI Page": "Executive Overview / Handoff", "Power BI Visual Type": "Table", "Primary Export Table": "PowerBI_Readiness", "Supporting Tables": "PowerBI_Relationship_Checks", "Fields Needed": "Metric, Value, Section, Status, Notes", "Recommended Slicers": "Run ID", "Recommended Sort": "Section then Metric", "Coverage Status": "Covered", "Notes": "Use PowerBI_Readiness for export readiness and PowerBI_Relationship_Checks for model readiness."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Saved Parameter Summary", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "Parameters", "Supporting Tables": "Run_Metadata", "Fields Needed": "Parameter, Value", "Recommended Slicers": "Run ID", "Recommended Sort": "Source order", "Coverage Status": "Covered", "Notes": "Shows governance and analysis input parameters."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Performance Safeguards", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "Run_Metadata", "Supporting Tables": "PowerBI_Readiness", "Fields Needed": "Field, Value", "Recommended Slicers": "Run ID", "Recommended Sort": "Source order", "Coverage Status": "Partially Covered", "Notes": "Core performance context is in metadata/readiness; app-only warning display is not a required Power BI visual."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Dealer Rate Coverage Score", "Power BI Page": "Exceptions & Data Quality", "Power BI Visual Type": "Cards and table", "Primary Export Table": "Fact_Rate_Coverage", "Supporting Tables": "Fact_Rebuild_Rows", "Fields Needed": "Metric, Value", "Recommended Slicers": "Run ID, Service Year, Dealer", "Recommended Sort": "Source order", "Coverage Status": "Covered", "Notes": "Use for rate governance scorecard."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Data Quality Score", "Power BI Page": "Exceptions & Data Quality", "Power BI Visual Type": "Cards and table", "Primary Export Table": "Fact_Data_Quality", "Supporting Tables": "DataQuality_Summary, Fact_Exception_Rows", "Fields Needed": "Metric, Value", "Recommended Slicers": "Run ID, Machine Group, Region", "Recommended Sort": "Source order", "Coverage Status": "Covered", "Notes": "Use alongside exception rows for data-quality narrative."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Executive KPI Cards", "Power BI Page": "Executive Overview", "Power BI Visual Type": "Cards", "Primary Export Table": "Fact_Rebuild_Rows", "Supporting Tables": "DAX_Starter", "Fields Needed": "Average Cost, Valid Rows, Total Rows, Outlier Rows, Cross-Type Outliers", "Recommended Slicers": "Machine Group, SALES MODEL, Region, CCR TYPE, Service Year", "Recommended Sort": "Not applicable", "Coverage Status": "Covered", "Notes": "Use DAX_Starter measures for consistent KPI cards."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Combined Global CCR Type Average Cost", "Power BI Page": "Executive Overview", "Power BI Visual Type": "Clustered column chart and table", "Primary Export Table": "Fact_Global_RebuildType_AvgCost", "Supporting Tables": "Dim_Rebuild_Type", "Fields Needed": "CCR Display, CCR Display Order, Avg_Cost, Avg_SMU, Count", "Recommended Slicers": "CCR TYPE, Service Year", "Recommended Sort": "CCR Display Order ascending", "Coverage Status": "Covered", "Notes": "Shows one reported CPT+H value after outlier exclusions."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Machine Group Average Cost by Rebuild Type", "Power BI Page": "Executive Overview", "Power BI Visual Type": "Clustered column chart / matrix", "Primary Export Table": "Fact_MachineGroup_RebuildType_AvgCost", "Supporting Tables": "Dim_Machine_Group, Dim_Rebuild_Type", "Fields Needed": "Machine Group, CCR Display, Avg_Cost, Count", "Recommended Slicers": "Machine Group, CCR TYPE, Region", "Recommended Sort": "Machine Group then CCR Display Order", "Coverage Status": "Covered", "Notes": "Use Dim_Machine_Group for clean group slicers."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "Machine Benchmark Ranking", "Power BI Page": "Executive Overview", "Power BI Visual Type": "Table / ranked bar chart", "Primary Export Table": "Fact_Machine_Ranking", "Supporting Tables": "Dim_Machine", "Fields Needed": "SALES MODEL, Avg_Cost, Priority Score, Priority Label, Outlier Rate %", "Recommended Slicers": "Machine Group, Region, Service Year", "Recommended Sort": "Priority Score descending", "Coverage Status": "Covered", "Notes": "Use to identify machines needing review."},
+        {"App Tab": "Executive Dashboard", "App Visual / Table": "SMU vs Cost Scatter", "Power BI Page": "Executive Overview / Machine Detail", "Power BI Visual Type": "Scatter chart", "Primary Export Table": "Fact_Rebuild_Rows", "Supporting Tables": "Dim_Machine, Dim_Rebuild_Type", "Fields Needed": "SMU AT REBUILD, analysis cost column, CCR TYPE, SALES MODEL, Outlier", "Recommended Slicers": "Machine Group, SALES MODEL, CCR TYPE, Region", "Recommended Sort": "Not applicable", "Coverage Status": "Covered", "Notes": "Use row-level fact table; color by CCR TYPE or Outlier."},
+        {"App Tab": "Machine Detail", "App Visual / Table": "Selected Machine KPI Cards", "Power BI Page": "Machine Detail", "Power BI Visual Type": "Cards", "Primary Export Table": "Fact_Rebuild_Rows", "Supporting Tables": "DAX_Starter, Dim_Machine", "Fields Needed": "Average Cost, Outlier Rows, Cross-Type Outliers, Average SMU", "Recommended Slicers": "SALES MODEL", "Recommended Sort": "Not applicable", "Coverage Status": "Covered", "Notes": "Use Dim_Machine[SALES MODEL] as the primary slicer."},
+        {"App Tab": "Machine Detail", "App Visual / Table": "Machine Rebuild-Type Average Cost", "Power BI Page": "Machine Detail", "Power BI Visual Type": "Clustered column chart and table", "Primary Export Table": "Fact_Machine_RebuildType_AvgCost", "Supporting Tables": "Dim_Machine, Dim_Rebuild_Type", "Fields Needed": "SALES MODEL, CCR Display, CCR Display Order, Avg_Cost, Count", "Recommended Slicers": "SALES MODEL, CCR TYPE", "Recommended Sort": "CCR Display Order ascending", "Coverage Status": "Covered", "Notes": "Shows one reported CMR, CPT+H, and CPT-O value when present."},
+        {"App Tab": "Machine Detail", "App Visual / Table": "Machine Region Breakdown by Rebuild Type", "Power BI Page": "Machine Detail", "Power BI Visual Type": "Small multiples chart or matrix", "Primary Export Table": "Fact_MachineRegion_RebuildType_AvgCost", "Supporting Tables": "Dim_Machine, Dim_Region, Dim_Rebuild_Type", "Fields Needed": "SALES MODEL, Region, CCR Display, Avg_Cost, Count", "Recommended Slicers": "SALES MODEL, Region, CCR TYPE", "Recommended Sort": "Region then CCR Display Order", "Coverage Status": "Covered", "Notes": "This table is required so region visuals respond to machine slicers."},
+        {"App Tab": "Machine Detail", "App Visual / Table": "Machine-Level Insights", "Power BI Page": "Machine Detail", "Power BI Visual Type": "Table / multi-row card", "Primary Export Table": "Fact_Machine_Insights", "Supporting Tables": "Dim_Machine", "Fields Needed": "SALES MODEL, Insight Category, Insight Text, Metric Name, Metric Value, Priority", "Recommended Slicers": "SALES MODEL, Priority", "Recommended Sort": "Priority then Insight Category", "Coverage Status": "Covered", "Notes": "Use as narrative explanation panel."},
+        {"App Tab": "Machine Detail", "App Visual / Table": "Cross-Type Outlier Audit", "Power BI Page": "Exceptions & Data Quality", "Power BI Visual Type": "Table", "Primary Export Table": "Fact_CrossType_Outliers", "Supporting Tables": "Dim_Machine, Dim_Dealer, Dim_Region", "Fields Needed": "SALES MODEL, Dealer Code, DEALER, Region, CMR Benchmark Cost, Cross-Type Threshold Cost, Outlier Reason", "Recommended Slicers": "SALES MODEL, Dealer, Region", "Recommended Sort": "analysis cost descending", "Coverage Status": "Covered", "Notes": "Audits CPT+H rows excluded by cross-type rule."},
+        {"App Tab": "Dealer Performance", "App Visual / Table": "Dealer Performance Table", "Power BI Page": "Dealer Performance", "Power BI Visual Type": "Table", "Primary Export Table": "Fact_Dealer_Performance", "Supporting Tables": "Dim_Dealer, Dim_Machine, Dim_Region", "Fields Needed": "Dealer Code, DEALER, SALES MODEL, Region, Avg_Cost, Performance Score, Performance Label", "Recommended Slicers": "Machine Group, SALES MODEL, Region, Dealer", "Recommended Sort": "Performance Score ascending or Avg_Cost descending", "Coverage Status": "Covered", "Notes": "Use for dealer review and ranking."},
+        {"App Tab": "Dealer Performance", "App Visual / Table": "Dealer Average Cost Chart", "Power BI Page": "Dealer Performance", "Power BI Visual Type": "Bar chart", "Primary Export Table": "Fact_Dealer_Performance", "Supporting Tables": "Dim_Dealer, Dim_Machine", "Fields Needed": "DEALER, Avg_Cost, Performance Label", "Recommended Slicers": "SALES MODEL, Region, Dealer", "Recommended Sort": "Avg_Cost descending", "Coverage Status": "Covered", "Notes": "Highlights highest-cost dealers for selected filters."},
+        {"App Tab": "Dealer Performance", "App Visual / Table": "Dealer Performance Score Chart", "Power BI Page": "Dealer Performance", "Power BI Visual Type": "Bar chart", "Primary Export Table": "Fact_Dealer_Performance", "Supporting Tables": "Dim_Dealer", "Fields Needed": "DEALER, Performance Score, Performance Label", "Recommended Slicers": "SALES MODEL, Region", "Recommended Sort": "Performance Score ascending", "Coverage Status": "Covered", "Notes": "Lowest scores generally need review first."},
+        {"App Tab": "Region Performance", "App Visual / Table": "Region Performance Table", "Power BI Page": "Region Performance", "Power BI Visual Type": "Table", "Primary Export Table": "Fact_Region_Performance", "Supporting Tables": "Dim_Region, Dim_Machine", "Fields Needed": "SALES MODEL, Region, Avg_Cost, Avg_SMU, Count, Outlier Rate %", "Recommended Slicers": "Machine Group, SALES MODEL, Region", "Recommended Sort": "Avg_Cost descending", "Coverage Status": "Covered", "Notes": "Use for machine-filtered regional summary."},
+        {"App Tab": "Region Performance", "App Visual / Table": "Region Rebuild-Type Chart", "Power BI Page": "Region Performance", "Power BI Visual Type": "Small multiples column chart / matrix", "Primary Export Table": "Fact_MachineRegion_RebuildType_AvgCost", "Supporting Tables": "Dim_Machine, Dim_Region, Dim_Rebuild_Type", "Fields Needed": "Region, SALES MODEL, CCR Display, Avg_Cost, Count", "Recommended Slicers": "Machine Group, SALES MODEL, Region, CCR TYPE", "Recommended Sort": "CCR Display Order ascending", "Coverage Status": "Covered", "Notes": "Use machine-region fact table rather than regional-only summary when machine slicer is present."},
+        {"App Tab": "Exceptions & Data Quality", "App Visual / Table": "Exception Count by Type", "Power BI Page": "Exceptions & Data Quality", "Power BI Visual Type": "Bar chart", "Primary Export Table": "Fact_Exception_Rows", "Supporting Tables": "Dim_Machine, Dim_Region, Dim_Rebuild_Type", "Fields Needed": "Exception Type, Exception Detail, Cost", "Recommended Slicers": "Machine Group, SALES MODEL, Region, CCR TYPE, Dealer", "Recommended Sort": "Exception count descending", "Coverage Status": "Covered", "Notes": "Use COUNTROWS(Fact_Exception_Rows) as value."},
+        {"App Tab": "Exceptions & Data Quality", "App Visual / Table": "Detailed Exception Rows", "Power BI Page": "Exceptions & Data Quality", "Power BI Visual Type": "Table", "Primary Export Table": "Fact_Exception_Rows", "Supporting Tables": "Fact_Rebuild_Rows", "Fields Needed": "SALES MODEL, DEALER, Region, CCR TYPE, Service Year, Exception Type, Exception Detail, Cost, SMU AT REBUILD", "Recommended Slicers": "Exception Type, SALES MODEL, Region, Dealer", "Recommended Sort": "Exception Type then Cost descending", "Coverage Status": "Covered", "Notes": "Source rows may appear more than once if multiple exceptions apply."},
+        {"App Tab": "Exceptions & Data Quality", "App Visual / Table": "Outlier Rows", "Power BI Page": "Exceptions & Data Quality", "Power BI Visual Type": "Table", "Primary Export Table": "Fact_Outlier_Rows", "Supporting Tables": "Dim_Machine, Dim_Rebuild_Type", "Fields Needed": "SALES MODEL, CCR TYPE, Outlier Rule Type, Outlier Reason, cost columns", "Recommended Slicers": "Outlier Rule Type, SALES MODEL, CCR TYPE", "Recommended Sort": "analysis cost descending", "Coverage Status": "Covered", "Notes": "Includes both statistical and cross-type outliers."},
+        {"App Tab": "Executive Insights", "App Visual / Table": "Executive Narrative", "Power BI Page": "Executive Overview / Machine Detail", "Power BI Visual Type": "Text box or table", "Primary Export Table": "Fact_Machine_Insights", "Supporting Tables": "Fact_Machine_Ranking, Run_Metadata", "Fields Needed": "Insight Text, Priority, Metric Name", "Recommended Slicers": "SALES MODEL, Priority", "Recommended Sort": "Priority then Metric Name", "Coverage Status": "Covered", "Notes": "Power BI can present narrative insights as table/Smart Narrative-style content."},
+        {"App Tab": "Power BI Readiness", "App Visual / Table": "Power BI Table Readiness", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "PowerBI_Readiness", "Supporting Tables": "PowerBI_Relationship_Checks", "Fields Needed": "Section, Table, Rows, Columns, Status, Notes", "Recommended Slicers": "Status", "Recommended Sort": "Status then Table", "Coverage Status": "Covered", "Notes": "Validates table structure and row/header readiness."},
+        {"App Tab": "Power BI Readiness", "App Visual / Table": "Relationship Checks", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "PowerBI_Relationship_Checks", "Supporting Tables": "Relationship_Guide", "Fields Needed": "Relationship, Fact Blank Key Count, Dimension Duplicate Key Count, Fact Unmatched Key Count, Status, Recommendation", "Recommended Slicers": "Status, Fact Table", "Recommended Sort": "Status then Relationship", "Coverage Status": "Covered", "Notes": "Primary troubleshooting table for slicer and model relationship issues."},
+        {"App Tab": "How to Use", "App Visual / Table": "Power BI Instructions", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "PowerBI_Instructions", "Supporting Tables": "PowerBI_Pipeline_Guide, PowerBI_Build_Checklist", "Fields Needed": "Step, Instruction, Notes", "Recommended Slicers": "None", "Recommended Sort": "Step ascending", "Coverage Status": "Covered", "Notes": "Report builder instructions exported as data."},
+        {"App Tab": "Methodology", "App Visual / Table": "Methodology / Known Limitations", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "Known_Limitations", "Supporting Tables": "Data_Dictionary, Run_Metadata", "Fields Needed": "Known Limitation, Details", "Recommended Slicers": "None", "Recommended Sort": "Source order", "Coverage Status": "Covered", "Notes": "Documents methodology rules and caveats."},
+        {"App Tab": "Governance & Dictionary", "App Visual / Table": "Data Dictionary", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Table", "Primary Export Table": "Data_Dictionary", "Supporting Tables": "PowerBI_Table_Dictionary", "Fields Needed": "Field, Definition", "Recommended Slicers": "None", "Recommended Sort": "Field ascending", "Coverage Status": "Covered", "Notes": "Use with PowerBI_Table_Dictionary for field and table definitions."},
+        {"App Tab": "Reference", "App Visual / Table": "Power BI Build / Pipeline / Layout Reference", "Power BI Page": "Handoff / Documentation", "Power BI Visual Type": "Tables", "Primary Export Table": "PowerBI_Report_Layout", "Supporting Tables": "PowerBI_Build_Checklist, PowerBI_Pipeline_Guide, PowerBI_Sheet_Name_Map, PowerBI_Visual_Coverage_Matrix", "Fields Needed": "Page, Section, Visual Type, Primary Table, Fields, Step, Action, Task", "Recommended Slicers": "Page, Coverage Status", "Recommended Sort": "Page then Section or Step", "Coverage Status": "Covered", "Notes": "These tables make the report reproducible and handoff-ready."},
+        {"App Tab": "Input Workflow", "App Visual / Table": "File upload controls, template downloads, run button, reset button", "Power BI Page": "Not applicable", "Power BI Visual Type": "Not applicable", "Primary Export Table": "Not applicable", "Supporting Tables": "Required_Files, PowerBI_Pipeline_Guide", "Fields Needed": "Not applicable", "Recommended Slicers": "Not applicable", "Recommended Sort": "Not applicable", "Coverage Status": "App Only", "Notes": "Power BI should recreate analytical outputs, not the Streamlit input workflow controls."},
+    ]
+    return pd.DataFrame(rows)
 
 def build_powerbi_sheet_name_map():
     rows = []
@@ -1028,7 +1068,8 @@ def build_powerbi_build_checklist():
         {"Order": 9, "Task": "Build Region Performance page", "Status Target": "Complete", "Validation": "Machine and region slicers affect charts", "Notes": "Use Dim_Machine and Dim_Region slicers."},
         {"Order": 10, "Task": "Build Dealer Performance page", "Status Target": "Complete", "Validation": "Dealer visuals respond to machine/region filters", "Notes": "Use Fact_Dealer_Performance."},
         {"Order": 11, "Task": "Build Exceptions & Data Quality page", "Status Target": "Complete", "Validation": "Outlier and cross-type audit tables reconcile to cards", "Notes": "Use Fact_CrossType_Outliers for CPT+H rule audit."},
-        {"Order": 12, "Task": "Test source-file replacement refresh", "Status Target": "Complete", "Validation": "Replacing the fixed workbook and refreshing updates visuals", "Notes": "This validates the Level 2 pipeline."},
+        {"Order": 12, "Task": "Confirm app visual coverage", "Status Target": "Complete", "Validation": "PowerBI_Visual_Coverage_Matrix shows Covered or App Only for expected outputs", "Notes": "Use this as the final handoff proof that app visuals/tables can be recreated in Power BI."},
+        {"Order": 13, "Task": "Test source-file replacement refresh", "Status Target": "Complete", "Validation": "Replacing the fixed workbook and refreshing updates visuals", "Notes": "This validates the Level 2 pipeline."},
     ])
 
 
@@ -1073,6 +1114,7 @@ def build_powerbi_table_dictionary():
         {"Table Name": "PowerBI_Sheet_Name_Map", "Excel Sheet Name": "PowerBI_Sheet_Name_Map", "Grain": "One row per exported logical table", "Purpose": "Map logical table names to Excel worksheet names.", "Typical Power BI Use": "Rename imported queries/tables consistently.", "Key Fields": "Logical Table Name, Excel Sheet Name, Name Shortened"},
         {"Table Name": "PowerBI_Pipeline_Guide", "Excel Sheet Name": "PowerBI_Pipeline_Guide", "Grain": "One row per pipeline step", "Purpose": "Document the SharePoint/OneDrive Level 2 Power BI source-file workflow.", "Typical Power BI Use": "Handoff and refresh process documentation.", "Key Fields": "Step, Action, Expected Result, Owner"},
         {"Table Name": "PowerBI_Build_Checklist", "Excel Sheet Name": "PowerBI_Build_Checklist", "Grain": "One row per report build/test task", "Purpose": "Checklist for building and validating the Power BI report.", "Typical Power BI Use": "Report build QA and handoff.", "Key Fields": "Order, Task, Validation, Notes"},
+        {"Table Name": "PowerBI_Visual_Coverage_Matrix", "Excel Sheet Name": "PowerBI_Visual_Coverage_Matrix", "Grain": "One row per app visual/table mapping", "Purpose": "Maps each app-presented analytical output to a Power BI page, visual type, and source table.", "Typical Power BI Use": "Proof-of-coverage and report rebuild blueprint.", "Key Fields": "App Tab, App Visual / Table, Power BI Page, Primary Export Table, Coverage Status"},
         {"Table Name": "DAX_Starter", "Excel Sheet Name": "DAX_Starter", "Grain": "One row per starter measure", "Purpose": "Starter DAX measures with page, format, visual, and business meaning.", "Typical Power BI Use": "Create consistent initial measures.", "Key Fields": "Page, Measure Name, DAX Expression, Format"},
         {"Table Name": "PowerBI_Report_Layout", "Excel Sheet Name": "PowerBI_Report_Layout", "Grain": "One row per recommended visual/section", "Purpose": "Detailed page-layout template for Power BI report building.", "Typical Power BI Use": "Report design blueprint.", "Key Fields": "Page, Section, Visual Type, Primary Table, Fields"},
     ])
@@ -2489,7 +2531,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     machine_insights_export = _add_run_columns(analysis.get("machine_insights", pd.DataFrame()).copy(), run_id, scenario_label)
 
     run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
-    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V18.1 Full Detailed Power BI Model Export", "Power BI is the primary output. All sheets are clean tables with headers on row 1. Long logical table names use shortened Excel sheet names where needed due to Excel sheet-name limits. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
+    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V18.2 Full Detailed Power BI Model Export", "Power BI is the primary output. All sheets are clean tables with headers on row 1. Long logical table names use shortened Excel sheet names where needed due to Excel sheet-name limits. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
     run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
 
     relationship_guide = pd.DataFrame({
@@ -2559,6 +2601,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "DAX_Starter": dax_starter,
         "PowerBI_Instructions": build_powerbi_instructions_table(),
         "PowerBI_Report_Layout": build_powerbi_report_layout_table(),
+        "PowerBI_Visual_Coverage_Matrix": build_powerbi_visual_coverage_matrix(),
         "PowerBI_Table_Dictionary": build_powerbi_table_dictionary(),
         "PowerBI_Sheet_Name_Map": build_powerbi_sheet_name_map(),
         "PowerBI_Pipeline_Guide": build_powerbi_pipeline_guide(),
@@ -2631,6 +2674,7 @@ def build_scenario_archive_package(analysis, scenario_name_value, export_reason_
         build_scenario_comparison_table(analysis, scenario_name_value=scenario_name_value).to_excel(writer, sheet_name="Scenario Comparison", index=False)
         build_powerbi_instructions_table().to_excel(writer, sheet_name="PowerBI Instructions", index=False)
         build_powerbi_report_layout_table().to_excel(writer, sheet_name="PowerBI Layout", index=False)
+        build_powerbi_visual_coverage_matrix().to_excel(writer, sheet_name="PBI Visual Coverage", index=False)
         build_powerbi_table_dictionary().to_excel(writer, sheet_name="PBI Table Dictionary", index=False)
         build_export_mode_dictionary().to_excel(writer, sheet_name="Export Modes", index=False)
         build_required_files_checklist().to_excel(writer, sheet_name="Required Files", index=False)
@@ -2650,7 +2694,7 @@ Export Reason: {export_reason_value}
 Files included:
 1. Rebuild_Analysis_PowerBI_Dataset_{safe_scenario}.xlsx
    - Clean Power BI-ready tables with headers on row 1.
-   - Use Relationship_Guide, DAX_Starter, PowerBI_Instructions, and PowerBI_Report_Layout.
+   - Use Relationship_Guide, DAX_Starter, PowerBI_Instructions, PowerBI_Report_Layout, and PowerBI_Visual_Coverage_Matrix.
 
 2. Rebuild_Analysis_Scenario_Archive_{safe_scenario}.xlsx
    - Human-readable archive workbook with metadata, filters, summaries, grouping, methodology support tables, and handoff information.
@@ -2796,7 +2840,7 @@ st.subheader("Export Controls")
 export_mode = st.selectbox("Export mode", ["Power BI Dataset Export", "Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Scenario Archive Package"], index=0)
 powerbi_selected_tables = POWERBI_FULL_EXPORT_TABLES.copy()
 if export_mode in ["Power BI Dataset Export", "Scenario Archive Package"]:
-    st.info("Power BI is the primary output. The app now produces one full detailed Power BI export with all required fact, dimension, audit, relationship-check, sheet-map, DAX, report-layout, pipeline, build-checklist, and handoff tables. Row 1 is always the header row on every exported sheet.")
+    st.info("Power BI is the primary output. The app now produces one full detailed Power BI export with all required fact, dimension, audit, relationship-check, sheet-map, DAX, report-layout, visual-coverage, pipeline, build-checklist, and handoff tables. Row 1 is always the header row on every exported sheet.")
 
 export_reason = st.selectbox("Export reason", ["Manager review", "Dealer review", "Cost benchmarking", "Data validation", "Presentation support", "Other"], index=0)
 export_reason_other = ""
