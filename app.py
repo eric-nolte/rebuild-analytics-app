@@ -52,7 +52,6 @@ POWERBI_SHEET_NAME_MAP = {
     "Fact_Global_RebuildType_AvgCost": "Fact_Global_RT_AvgCost",
     "Fact_Region_RebuildType_AvgCost": "Fact_Region_RT_AvgCost",
 }
-
 st.set_page_config(layout="wide", page_title="Rebuild Analytics Platform")
 
 # =====================================================
