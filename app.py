@@ -15,13 +15,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V18.3"
+APP_VERSION = "V18.5"
 APP_LAST_UPDATED = "2026-07-20"
 METHODOLOGY_VERSION = "2026.07-PowerBI-CrossType-Outlier-v18"
 OUTLIER_RULE_VERSION = "Cost Log-IQR + CPT+H Cross-Type Outlier by Machine"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V18.3 Power BI Reliability & Year-Aware Export"
+EXPORT_FORMAT_VERSION = "V18.5 Final QA & Documentation Polish"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -40,7 +40,9 @@ POWERBI_FULL_EXPORT_TABLES = [
     "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Visual_Coverage_Matrix", "PowerBI_Table_Dictionary",
     "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist",
     "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process",
-    "Known_Limitations", "Data_Dictionary", "Parameters", "PowerBI_Readiness", "PowerBI_Export_Health"
+    "Known_Limitations", "Data_Dictionary", "Parameters", "PowerBI_Readiness", "PowerBI_Export_Health",
+    "PowerBI_Schema_Status", "PowerBI_Modeling_Notes", "Handoff_Checklist", "Sample_Workflow",
+    "Version_History", "Methodology_Snapshot"
 ]
 DEFAULT_POWERBI_TABLES_STANDARD = POWERBI_FULL_EXPORT_TABLES
 DEFAULT_POWERBI_TABLES_DETAILED = POWERBI_FULL_EXPORT_TABLES
@@ -202,7 +204,7 @@ if "analysis" not in st.session_state:
 # =====================================================
 # CHART HELPERS
 # =====================================================
-CAT_DOMAIN = list(CERTIFIED_REBUILD_TYPES.keys()) + ["CPT+H Adjusted"]
+CAT_DOMAIN = list(CERTIFIED_REBUILD_TYPES.keys())
 CAT_RANGE = ["#000000", "#FFC500", "#7A7A7A", "#4D4D4D", "#FFCD00", "#2B2B2B", "#A6A6A6", "#6B5B00", "#C49700", "#595959", "#B38F00", "#333333", "#D9A300", "#808080", "#F2B705", "#1F1F1F", "#C0C0C0", "#8A6F00", "#E0B000", "#666666", "#FFC500"]
 CAT_COLOR_SCALE = alt.Scale(domain=CAT_DOMAIN, range=CAT_RANGE)
 
@@ -271,7 +273,7 @@ def add_ccr_display_columns(df):
 
 
 def cat_rebuild_type_bar_chart(data, value_col="Avg_Cost", height=360):
-    """Bar chart that treats CMR, CPT+H Standard, CPT+H Adjusted, and CPT-O as clean sections."""
+    """Bar chart that treats CMR, CPT+H, CPT-O, and other rebuild types as clean sections."""
     if data is None or data.empty:
         st.info("No rebuild-type chart data available.")
         return
@@ -376,11 +378,92 @@ def sanitize_excel_df(df):
     return safe_df
 
 
+DEFAULT_EXPORT_SHEET_HEADERS = {
+    "Summary": ["CCR TYPE", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence"],
+    "Machine Ranking": ["SALES MODEL", "Avg_Cost", "Avg_SMU", "Valid_Rows", "Total_Rows", "Outlier_Rows", "Outlier Rate %", "Priority Score", "Priority Label"],
+    "Global CCR Type Avg": ["Scope", "CCR TYPE", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence"],
+    "Region CCR Type Avg": ["Region", "CCR TYPE", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence"],
+    "Machine CCR Type Avg": ["SALES MODEL", "Machine Group", "CCR TYPE", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence"],
+    "Group CCR Type Avg": ["Machine Group", "CCR TYPE", "CCR Display", "CCR Display Order", "Avg_Cost", "Avg_SMU", "Count", "Sample Confidence"],
+    "Machine Insights": ["SALES MODEL", "Machine Group", "Insight Category", "Insight Text", "Metric Name", "Metric Value", "Priority"],
+    "Executive Narrative": ["Executive Narrative"],
+    "Exceptions": ["Metric", "Value"],
+    "Data Quality": ["Metric", "Value"],
+    "Rate Exceptions": ["SALES MODEL", "DEALER", "Dealer Code", "Region", "CCR TYPE", "Service Year", "Dealer Rate Exception Flag"],
+    "Outlier Performance": ["CCR TYPE", "Total_Rows", "Outlier_Rows", "Avg_Cost_All", "Valid_Rows", "Outlier Rate %"],
+    "Cross Type Flags": ["SALES MODEL", "DEALER", "Dealer Code", "Region", "CCR TYPE", "Service Year", "Cross-Type Exception Flag", "CMR Benchmark Cost", "Cross-Type Threshold Cost"],
+    "Outlier Rows": ["SALES MODEL", "DEALER", "Dealer Code", "Region", "CCR TYPE", "Service Year", "Outlier", "Outlier Rule Type", "Outlier Reason"],
+    "Rate Validation": ["Check", "Value", "Status"],
+    "Dealer Rates Used": ["Dealer Code", "Service Year", "Rate", "Rate Currency", "Notes", "Rate File Sheet", "Rate File Format"],
+    "Run Metadata": ["Field", "Value"],
+    "Run Readiness": ["Readiness Check", "Status", "Details"],
+    "Rate Coverage": ["Metric", "Value"],
+    "Rate Coverage Detail": ["Metric", "Value"],
+    "Data Quality Score": ["Metric", "Value"],
+    "Parameters": ["Parameter", "Value"],
+    "Performance Checks": ["Safeguard", "Status", "Details"],
+    "BLS CPI": ["Year", "CPI"],
+    "FX Rates": ["Currency", "Service Year", "FX to USD", "FX Source"],
+    "Rebuild Type Reference": ["CCR TYPE", "Description"],
+    "Region Reference": ["Region"],
+    "Known Limitations": ["Known Limitation", "Details"],
+    "Data Dictionary": ["Field", "Definition"],
+    "PBI Table Dictionary": ["Table Name", "Excel Sheet Name", "Grain", "Purpose", "Typical Power BI Use", "Key Fields"],
+    "Export Modes": ["Export Mode", "Best For", "Notes"],
+    "Required Files": ["Item", "Required", "Purpose"],
+    "Testing Checklist": ["Test", "Expected Result"],
+    "Update Process": ["Step", "Action", "Reason"],
+    "Role Design": ["Role View", "Intended Capability", "Current App Behavior"],
+    "Machine Summary": ["Metric", "Value"],
+    "Rebuild Type Summary": ["CCR TYPE", "Avg_Cost", "Avg_SMU", "Count", "Vs CMR %", "Sample Confidence"],
+    "Adjusted Cost Summary": ["CCR TYPE", "Adjusted_Avg_Cost", "Count", "Sample Confidence"],
+    "Reported CPT-H Audit": ["Metric", "Value"],
+    "Dealer Performance": ["DEALER", "Avg_Cost", "Avg_SMU", "Count", "Outlier Rate %", "Performance Score", "Performance Label"],
+    "Region Performance": ["Region", "Avg_Cost", "Avg_SMU", "Count", "Vs Section Avg %"],
+    "Raw Data": ["Message"],
+    "Valid Raw Data": ["Message"],
+    "Methodology": ["Methodology Item", "Description"],
+}
+
+
+def _dedupe_and_clean_headers(columns):
+    cleaned = []
+    seen = {}
+    for idx, col in enumerate(columns, start=1):
+        name = re.sub(r"\s+", " ", str(col)).strip() if col is not None else ""
+        if not name or name.lower().startswith("unnamed"):
+            name = f"Column_{idx}"
+        base = name
+        count = seen.get(base, 0)
+        if count:
+            name = f"{base}_{count + 1}"
+        seen[base] = count + 1
+        cleaned.append(name)
+    return cleaned
+
+
+def ensure_excel_export_headers(df, sheet_name=None):
+    """Guarantee every exported Excel sheet has a real header row, even for empty frames."""
+    if df is None or not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame()
+    out = df.copy()
+    if out.shape[1] == 0:
+        headers = DEFAULT_EXPORT_SHEET_HEADERS.get(str(sheet_name), ["Message"])
+        out = pd.DataFrame(columns=headers)
+    else:
+        out.columns = _dedupe_and_clean_headers(out.columns)
+    return out
+
+
 if not hasattr(pd.DataFrame, "_cat_original_to_excel"):
     pd.DataFrame._cat_original_to_excel = pd.DataFrame.to_excel
 
     def _secure_to_excel(self, *args, **kwargs):
-        return pd.DataFrame._cat_original_to_excel(sanitize_excel_df(self), *args, **kwargs)
+        sheet_name = kwargs.get("sheet_name")
+        if sheet_name is None and len(args) >= 2:
+            sheet_name = args[1]
+        export_df = ensure_excel_export_headers(self, sheet_name)
+        return pd.DataFrame._cat_original_to_excel(sanitize_excel_df(export_df), *args, **kwargs)
 
     pd.DataFrame.to_excel = _secure_to_excel
 
@@ -595,8 +678,8 @@ def build_executive_narrative(valid_df, summary_df, cost_col, outlier_count, cro
     except Exception:
         pass
     lines.append(f"Cost outliers excluded from core averages: {outlier_count:,}.")
-    lines.append(f"CPT+H cross-type review flags: {cross_count:,}.")
-    lines.append("Cross-type CPT+H outliers are treated as outliers and excluded from reported CPT+H averages." if show_adjusted else "Cross-type CPT+H outliers are treated as outliers and exported for audit.")
+    lines.append(f"CPT+H cross-type outliers: {cross_count:,}.")
+    lines.append("Cross-type CPT+H outliers are treated as outliers and excluded from reported CPT+H averages." if show_adjusted else "Cross-type CPT+H outliers are excluded from reported averages and exported for audit.")
     return lines
 
 
@@ -639,7 +722,7 @@ def build_known_limitations_table():
             "If live FX retrieval fails, embedded fallback FX rates may be used and flagged.",
             "The expanded built-in dealer-rate workbook must be deployed next to app.py; otherwise emergency generic rates are used.",
             "Cost outliers are detected by Machine + CCR TYPE using log(cost) IQR logic only.",
-            "CPT+H cross-type review requires at least 3 valid CMR rows for the same machine.",
+            "CPT+H cross-type outlier detection requires at least 3 valid CMR rows for the same machine.",
             " labeling and acknowledgements support governance but do not replace enterprise authentication/authorization.",
         ],
     })
@@ -874,7 +957,7 @@ def build_powerbi_export_preview(tables, selected_tables=None):
         cols = [str(c) for c in table.columns]
         blank_cols = sum(1 for c in cols if c.strip() == "" or c.startswith("Unnamed"))
         dup_cols = len(cols) - len(set(cols))
-        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "PowerBI_Relationship_Checks", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Visual_Coverage_Matrix", "PowerBI_Table_Dictionary", "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
+        run_id = "Run ID" in cols or name in ["Data_Dictionary", "Known_Limitations", "Relationship_Guide", "PowerBI_Relationship_Checks", "DAX_Starter", "PowerBI_Instructions", "PowerBI_Report_Layout", "PowerBI_Visual_Coverage_Matrix", "PowerBI_Table_Dictionary", "PowerBI_Sheet_Name_Map", "PowerBI_Pipeline_Guide", "PowerBI_Build_Checklist", "PowerBI_Schema_Status", "PowerBI_Export_Health", "PowerBI_Modeling_Notes", "Handoff_Checklist", "Sample_Workflow", "Version_History", "Methodology_Snapshot", "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process"]
         marker_rows = 0
         if not table.empty:
             first_col = table.columns[0]
@@ -934,7 +1017,7 @@ def build_scenario_comparison_table(analysis, run_id=None, scenario_name_value=N
         "Total Rows": [total],
         "Outlier Rows": [outliers],
         "Outlier Rate %": [_percent_from_counts(outliers, total)],
-        "Cross-Type Flags": [int((valid["Cross-Type Exception Flag"].astype(str).str.strip() != "").sum()) if "Cross-Type Exception Flag" in valid.columns else 0],
+        "Cross-Type Outliers": [int((valid["Cross-Type Exception Flag"].astype(str).str.strip() != "").sum()) if "Cross-Type Exception Flag" in valid.columns else 0],
         "Dealer Rate Coverage %": [lookup(rate_cov, "Dealer-Year Match Rate %")],
         "Data Quality Score": [lookup(dq_score, "Data Quality Score")],
         "Start Year": [start_year],
@@ -1134,7 +1217,7 @@ def build_export_mode_dictionary():
     return pd.DataFrame([
         {"Export Mode": "Full Analysis Workbook", "Best For": "Human review and detailed Excel audit", "Notes": "Includes formatted sheets, tables, exceptions, references, and per-machine tabs."},
         {"Export Mode": "Summary Only", "Best For": "Fast manager review", "Notes": "Contains summary, machine ranking, key metadata, and support sheets without large raw data tabs."},
-        {"Export Mode": "Exceptions Only", "Best For": "Outlier, data-quality, and cross-type review", "Notes": "Use when the user only needs rows requiring attention."},
+        {"Export Mode": "Exceptions Only", "Best For": "Outlier, data-quality, and cross-type outlier review", "Notes": "Use when the user only needs rows requiring attention."},
         {"Export Mode": "Dealer Rate Audit", "Best For": "Validating dealer labor rate coverage", "Notes": "Includes rate validation, rate coverage, rate exceptions, and dealer rates used."},
         {"Export Mode": "Power BI Dataset Export", "Best For": "Power BI Desktop / Power BI semantic model creation", "Notes": "Clean table export with headers on row 1. Do not use formatted review workbook for Power BI imports."},
         {"Export Mode": "Scenario Archive Package", "Best For": "Handoff and scenario preservation", "Notes": "ZIP package with clean Power BI dataset, archive workbook, and README."},
@@ -1179,8 +1262,97 @@ def build_update_process_table():
         {"Step": 8, "Action": "Update changelog / handoff notes", "Reason": "Future users can understand what changed and why."},
     ])
 
+
+def build_current_methodology_snapshot_table():
+    return pd.DataFrame([
+        {"Methodology Area": "Methodology Version", "Current Standard": METHODOLOGY_VERSION, "Why It Matters": "Identifies the business-rule set used for this export."},
+        {"Methodology Area": "Cost Basis", "Current Standard": "Adjusted Total Cost USD = PARTS DN USD + Labor Cost USD", "Why It Matters": "All averages, outlier detection, and Power BI tables use the same cost basis."},
+        {"Methodology Area": "Labor Cost", "Current Standard": "Labor Cost USD = REBUILD WORK HRS x dealer service-year labor rate", "Why It Matters": "Labor is calculated consistently using dealer-year base rates."},
+        {"Methodology Area": "Inflation", "Current Standard": "BLS CPI-U component-level inflation to selected base year", "Why It Matters": "Allows cost comparison across service years."},
+        {"Methodology Area": "Statistical Outliers", "Current Standard": "Log(cost) IQR by Machine + CCR TYPE", "Why It Matters": "Excludes extreme cost records from reported averages."},
+        {"Methodology Area": "Cross-Type Outliers", "Current Standard": "CPT+H above machine-level valid CMR median x 1.10 is treated as an outlier when enough CMR rows exist", "Why It Matters": "Prevents CPT+H averages from being distorted by costs above typical CMR levels."},
+        {"Methodology Area": "CPT+H Reporting", "Current Standard": "One reported CPT+H value after statistical and cross-type outlier exclusions", "Why It Matters": "Power BI visuals no longer need standard versus reported CPT+H after exclusions values."},
+        {"Methodology Area": "Auditability", "Current Standard": "Excluded statistical and cross-type outliers remain exported in audit tables", "Why It Matters": "Users can explain which records were excluded and why."},
+        {"Methodology Area": "Power BI Export", "Current Standard": "Single full detailed Power BI Dataset Export with locked schema and row 1 headers", "Why It Matters": "Supports stable refresh from a fixed SharePoint/OneDrive source file."},
+    ])
+
+def build_powerbi_modeling_notes_table():
+    return pd.DataFrame([
+        {"Topic": "Primary dynamic fact table", "Recommendation": "Use Fact_Rebuild_Rows for visuals that must respond to Machine, Region, Dealer, Rebuild Type, and Service Year slicers.", "Reason": "This table has the broadest row-level grain and supports fully dynamic Power BI measures."},
+        {"Topic": "Machine-region-year visuals", "Recommendation": "Use Fact_MachineRegionYear_RebuildType_AvgCost for machine + region + service-year rebuild-type charts.", "Reason": "This table was added so region rebuild-type visuals can respond to machine and service-year slicers."},
+        {"Topic": "Dealer-year visuals", "Recommendation": "Use Fact_DealerYear_Performance when dealer visuals must respond directly to Service Year.", "Reason": "Dealer summary tables without Service Year cannot be filtered by the year dimension."},
+        {"Topic": "Relationships", "Recommendation": "Use one-to-many, single-direction, active relationships from dimensions to fact tables.", "Reason": "This avoids ambiguity and keeps slicer behavior predictable."},
+        {"Topic": "Avoid many-to-many", "Recommendation": "Do not create many-to-many relationships unless a data model owner confirms the need.", "Reason": "Many-to-many relationships can create ambiguous filters and confusing totals."},
+        {"Topic": "Machine group slicers", "Recommendation": "Use Dim_Machine[Machine Group] for broad report filtering; use Dim_Machine_Group mainly for group-level summary views.", "Reason": "This avoids duplicate filter paths between machine group, machine, and fact tables."},
+        {"Topic": "Reported CPT+H", "Recommendation": "Use the reported CPT+H value only. Do not recreate old standard versus reported CPT+H after exclusions visuals.", "Reason": "V18 methodology treats cross-type CPT+H rows as outliers and reports one CPT+H average."},
+        {"Topic": "Header-only tables", "Recommendation": "Treat header-only audit tables as valid when no rows exist for that exception type.", "Reason": "The app exports fixed schemas to keep Power BI refresh stable."},
+    ])
+
+def build_handoff_checklist_table():
+    return pd.DataFrame([
+        {"Order": 1, "Checklist Item": "App version confirmed", "Target Status": "Complete", "Validation": "Header shows V18.4 or later.", "Owner": "App user"},
+        {"Order": 2, "Checklist Item": "Dealer rate source confirmed", "Target Status": "Complete", "Validation": "Built-in expanded dealer rates or approved custom rate file selected.", "Owner": "App user"},
+        {"Order": 3, "Checklist Item": "Machine grouping source confirmed", "Target Status": "Complete", "Validation": "Built-in grouping or approved custom grouping file reviewed.", "Owner": "App user"},
+        {"Order": 4, "Checklist Item": "Data quality reviewed", "Target Status": "Complete", "Validation": "Data Quality Score and exceptions reviewed.", "Owner": "Analyst"},
+        {"Order": 5, "Checklist Item": "Outliers reviewed", "Target Status": "Complete", "Validation": "Statistical and cross-type outlier tables reviewed where applicable.", "Owner": "Analyst"},
+        {"Order": 6, "Checklist Item": "Power BI export health passed", "Target Status": "Complete", "Validation": "Power BI Export Status is Ready or documented as Needs Review.", "Owner": "Analyst"},
+        {"Order": 7, "Checklist Item": "Export saved with fixed source file name", "Target Status": "Complete", "Validation": "File is saved as Rebuild_Analytics_PowerBI_Dataset.xlsx.", "Owner": "Data owner"},
+        {"Order": 8, "Checklist Item": "Fixed source file replaced", "Target Status": "Complete", "Validation": "Existing SharePoint/OneDrive source file replaced without changing path.", "Owner": "Data owner"},
+        {"Order": 9, "Checklist Item": "Power BI refresh tested", "Target Status": "Complete", "Validation": "Power BI Desktop refresh completes and key visuals update.", "Owner": "Power BI owner"},
+        {"Order": 10, "Checklist Item": "Scenario archive saved if needed", "Target Status": "Optional", "Validation": "Scenario archive package saved outside the fixed source folder.", "Owner": "Analyst"},
+    ])
+
+def build_sample_workflow_table():
+    return pd.DataFrame([
+        {"Step": 1, "Workflow Step": "Upload rebuild workbook", "Expected Result": "Workbook profile and validation checks appear."},
+        {"Step": 2, "Workflow Step": "Confirm dealer rates", "Expected Result": "Built-in rates are available or custom dealer-rate upload is validated."},
+        {"Step": 3, "Workflow Step": "Confirm machine grouping", "Expected Result": "Built-in or uploaded grouping is previewed."},
+        {"Step": 4, "Workflow Step": "Run analysis", "Expected Result": "Executive, machine, dealer, region, exceptions, and readiness tabs populate."},
+        {"Step": 5, "Workflow Step": "Review methodology snapshot", "Expected Result": "User confirms V18 cross-type outlier methodology and one reported CPT+H value."},
+        {"Step": 6, "Workflow Step": "Review data quality and outliers", "Expected Result": "Data quality, statistical outliers, and cross-type outlier audit rows are reviewed."},
+        {"Step": 7, "Workflow Step": "Review Power BI export health", "Expected Result": "Schema, tables, relationship checks, and row 1 header status are reviewed."},
+        {"Step": 8, "Workflow Step": "Download Power BI Dataset Export", "Expected Result": "Clean Power BI workbook is downloaded."},
+        {"Step": 9, "Workflow Step": "Rename and replace fixed source file", "Expected Result": "File is saved as Rebuild_Analytics_PowerBI_Dataset.xlsx and replaces the approved SharePoint/OneDrive source file."},
+        {"Step": 10, "Workflow Step": "Refresh Power BI", "Expected Result": "Power BI report refreshes using the updated source workbook."},
+    ])
+
+def build_version_history_table():
+    return pd.DataFrame([
+        {"Version": "V18.0", "Release Theme": "Power BI core export and cross-type outlier methodology", "Key Changes": "Power BI became the primary export focus; cross-type CPT+H exceptions became outliers; one CPT+H value reported."},
+        {"Version": "V18.1", "Release Theme": "Power BI model handoff", "Key Changes": "Added relationship checks, sheet-name map, Dim_Machine_Group, pipeline guide, build checklist, expanded DAX starter and layout guidance."},
+        {"Version": "V18.2", "Release Theme": "Visual coverage matrix", "Key Changes": "Added PowerBI_Visual_Coverage_Matrix to map app visuals and tables to Power BI build paths."},
+        {"Version": "V18.3", "Release Theme": "Power BI reliability and year-aware export", "Key Changes": "Added locked export schemas, PowerBI_Export_Health, and year-aware aggregate tables for Service Year slicer support."},
+        {"Version": "V18.4", "Release Theme": "Final handoff and Power BI stabilization", "Key Changes": "Added schema status test, methodology snapshot, modeling notes, handoff checklist, sample workflow, version history, and stronger fixed-source-file instructions."},
+        {"Version": "V18.5", "Release Theme": "Final QA and documentation polish", "Key Changes": "Added GitHub README support, golden test workbook guidance, and stronger Excel export header enforcement for all workbook exports."},
+    ])
+
+def build_powerbi_schema_status_table(tables):
+    rows = []
+    for table_name in POWERBI_FULL_EXPORT_TABLES:
+        df = tables.get(table_name, pd.DataFrame())
+        if df is None or not isinstance(df, pd.DataFrame):
+            df = pd.DataFrame()
+        schema = get_powerbi_export_schema(table_name)
+        cols = [str(c) for c in df.columns]
+        missing = [c for c in (schema or []) if c not in cols]
+        duplicate_count = len(cols) - len(set(cols))
+        blank_count = sum(1 for c in cols if c.strip() == "" or c.startswith("Unnamed"))
+        status = "Passed" if not missing and duplicate_count == 0 and blank_count == 0 else "Needs Review"
+        rows.append({
+            "Table": table_name,
+            "Rows": len(df),
+            "Columns": len(cols),
+            "Expected Schema Defined": "Yes" if schema else "Documentation/Generated Table",
+            "Missing Required Columns": ", ".join(missing) if missing else "None",
+            "Duplicate Headers": duplicate_count,
+            "Blank Headers": blank_count,
+            "Row 1 Header Required": "Yes",
+            "Status": status,
+        })
+    return pd.DataFrame(rows)
+
 def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col):
-    """Global CCR type summary with Standard and Adjusted CPT+H in the same table."""
+    """Global CCR type summary with Standard and Reported CPT+H After Exclusions in the same table."""
     rows = []
     if valid_df is None or valid_df.empty:
         return pd.DataFrame()
@@ -1221,7 +1393,7 @@ def build_combined_global_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
 
 
 def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
-    """Region + CCR type summary with Standard and Adjusted CPT+H together."""
+    """Region + CCR type summary with Standard and Reported CPT+H After Exclusions together."""
     rows = []
     if valid_df is None or valid_df.empty:
         return pd.DataFrame()
@@ -1263,7 +1435,7 @@ def build_combined_region_ccr_type_summary(valid_df, adjusted_valid_df, cost_col
 
 
 def build_combined_machine_ccr_type_summary(valid_df, adjusted_valid_df, cost_col, global_ccr_summary=None):
-    """Machine + CCR type summary with Standard and Adjusted CPT+H together."""
+    """Machine + CCR type summary with Standard and Reported CPT+H After Exclusions together."""
     rows = []
     if valid_df is None or valid_df.empty:
         return pd.DataFrame()
@@ -1373,7 +1545,7 @@ def build_machine_insights_table(valid_df, processed_df, machine_ccr_summary, co
             rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Outliers", "Insight Text": f"{machine} has {outliers:,} cost outlier row(s) excluded from core averages.", "Metric Name": "Cost Outliers", "Metric Value": outliers, "Priority": "Review"})
         cross_flags = int((mvalid["Cross-Type Exception Flag"].astype(str).str.strip() != "").sum()) if "Cross-Type Exception Flag" in mvalid.columns else 0
         if cross_flags:
-            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Cross-Type Flags", "Insight Text": f"{machine} has {cross_flags:,} CPT+H cross-type review flag(s).", "Metric Name": "Cross-Type Flags", "Metric Value": cross_flags, "Priority": "Review"})
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Cross-Type Outliers", "Insight Text": f"{machine} has {cross_flags:,} CPT+H cross-type outlier row(s).", "Metric Name": "Cross-Type Outliers", "Metric Value": cross_flags, "Priority": "Review"})
         std_cpth = machine_ccr_summary[(machine_ccr_summary["SALES MODEL"] == machine) & (machine_ccr_summary["CCR TYPE"] == "CPT+H") & (machine_ccr_summary["Cost View"] == "Standard")] if machine_ccr_summary is not None and not machine_ccr_summary.empty else pd.DataFrame()
         adj_cpth = machine_ccr_summary[(machine_ccr_summary["SALES MODEL"] == machine) & (machine_ccr_summary["CCR TYPE"] == "CPT+H") & (machine_ccr_summary["Cost View"] == "Adjusted")] if machine_ccr_summary is not None and not machine_ccr_summary.empty else pd.DataFrame()
         if not std_cpth.empty and not adj_cpth.empty:
@@ -1381,7 +1553,7 @@ def build_machine_insights_table(valid_df, processed_df, machine_ccr_summary, co
             adj_val = adj_cpth["Avg_Cost"].iloc[0]
             diff_pct = (adj_val - std_val) / std_val * 100 if std_val else np.nan
             removed = int(adj_cpth["Cross-Type Outliers Excluded"].iloc[0]) if "Cross-Type Outliers Excluded" in adj_cpth.columns else 0
-            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Adjusted CPT+H", "Insight Text": f"{machine} standard CPT+H is {money(std_val)}; adjusted CPT+H is {money(adj_val)} after removing {removed:,} flagged row(s), a {diff_pct:.1f}% change.", "Metric Name": "Adjusted CPT+H Difference %", "Metric Value": diff_pct, "Priority": "Info" if removed == 0 else "Review"})
+            rows.append({"SALES MODEL": machine, "Machine Group": group, "Insight Category": "Reported CPT+H After Exclusions", "Insight Text": f"{machine} reported CPT+H is {money(std_val)}; reported CPT+H after exclusions is {money(adj_val)} after removing {removed:,} flagged row(s), a {diff_pct:.1f}% change.", "Metric Name": "Reported CPT+H After Exclusions Difference %", "Metric Value": diff_pct, "Priority": "Info" if removed == 0 else "Review"})
         if "Region" in mvalid.columns:
             reg = mvalid.groupby("Region")[cost_col].mean().sort_values(ascending=False)
             if len(reg) > 0:
@@ -2148,7 +2320,7 @@ def build_machine_export(selected_machine, analysis):
     machine_summary = pd.DataFrame({
         "Metric": [
             "Selected Machine", "Total Rows", "Valid Rows", "Standard Avg Cost", "Adjusted Avg Cost",
-            "Adjusted CPT+H Avg", "Average SMU", "Cost Outliers", "Cross-Type Flags",
+            "Reported CPT+H After Exclusions Avg", "Average SMU", "Cost Outliers", "Cross-Type Outliers",
             "SMU Data Quality Flags", "Fallback Labor Rate Rows", "Fallback FX Rows"
         ],
         "Value": [
@@ -2181,7 +2353,7 @@ def build_machine_export(selected_machine, analysis):
         Count=(cost_col, "count"),
     ).reset_index() if not machine_adjusted_valid.empty else pd.DataFrame(columns=["CCR TYPE", "Adjusted_Avg_Cost", "Count"])
     if not adjusted_summary.empty:
-        adjusted_summary["CCR TYPE"] = adjusted_summary["CCR TYPE"].replace({"CPT+H": "CPT+H Adjusted"})
+        adjusted_summary["CCR TYPE"] = adjusted_summary["CCR TYPE"].replace({"CPT+H": "CPT+H"})
         adjusted_summary["Sample Confidence"] = adjusted_summary["Count"].apply(sample_confidence)
 
     standard_cpth = machine_valid[machine_valid["CCR TYPE"] == "CPT+H"][cost_col].mean() if not machine_valid.empty else np.nan
@@ -2189,7 +2361,7 @@ def build_machine_export(selected_machine, analysis):
     cpth_diff = adjusted_cpth - standard_cpth if pd.notna(adjusted_cpth) and pd.notna(standard_cpth) else np.nan
     cpth_diff_pct = (cpth_diff / standard_cpth) if pd.notna(cpth_diff) and standard_cpth else np.nan
     adjusted_comparison = pd.DataFrame({
-        "Metric": ["Standard CPT+H Avg", "Adjusted CPT+H Avg", "Difference $", "Difference %", "Cross-Type Outliers Excluded"],
+        "Metric": ["Reported CPT+H Avg", "Reported CPT+H After Exclusions Avg", "Difference $", "Difference %", "Cross-Type Outliers Excluded"],
         "Value": [standard_cpth, adjusted_cpth, cpth_diff, cpth_diff_pct, int(((machine_valid["CCR TYPE"] == "CPT+H") & (machine_valid["Cross-Type Exception Flag"] != "")).sum()) if not machine_valid.empty else 0]
     })
 
@@ -2230,7 +2402,7 @@ def build_machine_export(selected_machine, analysis):
 
     methodology = pd.DataFrame({
         "Methodology Item": [
-            "Cost Basis", "Labor Cost", "Currency", "Inflation", "Outliers", "Sample Size", "SMU", "Cross-Type Rule", "Adjusted CPT+H", "Dealer Score"
+            "Cost Basis", "Labor Cost", "Currency", "Inflation", "Outliers", "Sample Size", "SMU", "Cross-Type Rule", "Reported CPT+H After Exclusions", "Dealer Score"
         ],
         "Description": [
             "Adjusted Total Cost USD = PARTS DN USD + Labor Cost USD. PLUS PARTS DN is ignored.",
@@ -2253,7 +2425,7 @@ def build_machine_export(selected_machine, analysis):
         machine_summary.to_excel(writer, sheet_name="Machine Summary", index=False)
         rebuild_summary.to_excel(writer, sheet_name="Rebuild Type Summary", index=False)
         adjusted_summary.to_excel(writer, sheet_name="Adjusted Cost Summary", index=False)
-        adjusted_comparison.to_excel(writer, sheet_name="Adjusted CPT-H Impact", index=False)
+        adjusted_comparison.to_excel(writer, sheet_name="Reported CPT-H Audit", index=False)
         dealer_summary.to_excel(writer, sheet_name="Dealer Performance", index=False)
         region_summary.to_excel(writer, sheet_name="Region Performance", index=False)
         machine_all.to_excel(writer, sheet_name="Raw Data", index=False)
@@ -2532,9 +2704,15 @@ def build_powerbi_export_health_summary(tables, preview_df=None, relationship_ch
     status = "Ready" if not_ready == 0 and rel_not_ready == 0 else "Not Ready"
     if status == "Ready" and (needs_review > 0 or rel_needs_review > 0):
         status = "Needs Review"
+    schema_status = tables.get("PowerBI_Schema_Status", pd.DataFrame())
+    schema_issues = 0
+    if isinstance(schema_status, pd.DataFrame) and not schema_status.empty and "Status" in schema_status.columns:
+        schema_issues = int((schema_status["Status"] != "Passed").sum())
+        if schema_issues > 0 and status == "Ready":
+            status = "Needs Review"
     return pd.DataFrame({
-        "Metric": ["Power BI Export Status", "Tables Exported", "Tables With Rows", "Headers-Only Tables", "Table Issues - Not Ready", "Table Issues - Needs Review", "Relationship Issues - Not Ready", "Relationship Issues - Needs Review", "Fixed Schema Applied", "Row 1 Headers Guaranteed"],
-        "Value": [status, total_tables, tables_with_rows, headers_only, not_ready, needs_review, rel_not_ready, rel_needs_review, "Yes", "Yes"],
+        "Metric": ["Power BI Export Status", "Tables Exported", "Tables With Rows", "Headers-Only Tables", "Table Issues - Not Ready", "Table Issues - Needs Review", "Relationship Issues - Not Ready", "Relationship Issues - Needs Review", "Schema Issues", "Fixed Schema Applied", "Row 1 Headers Guaranteed"],
+        "Value": [status, total_tables, tables_with_rows, headers_only, not_ready, needs_review, rel_not_ready, rel_needs_review, schema_issues, "Yes", "Yes"],
     })
 
 def build_dim_machine_group(processed_df, run_id, scenario_label):
@@ -2673,7 +2851,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     machine_insights_export = _add_run_columns(analysis.get("machine_insights", pd.DataFrame()).copy(), run_id, scenario_label)
 
     run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
-    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V18.3 Full Detailed Power BI Reliability & Year-Aware Export", "Power BI is the primary output. All sheets are clean tables with headers on row 1. Long logical table names use shortened Excel sheet names where needed due to Excel sheet-name limits. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
+    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V18.5 Final QA & Documentation Polish Export", "Power BI is the primary output. All sheets are clean tables with headers on row 1. Long logical table names use shortened Excel sheet names where needed due to Excel sheet-name limits. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
     run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
 
     relationship_guide = pd.DataFrame({
@@ -2771,6 +2949,11 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Required_Files": build_required_files_checklist(),
         "Testing_Checklist": build_testing_checklist(),
         "Update_Process": build_update_process_table(),
+        "PowerBI_Modeling_Notes": build_powerbi_modeling_notes_table(),
+        "Handoff_Checklist": build_handoff_checklist_table(),
+        "Sample_Workflow": build_sample_workflow_table(),
+        "Version_History": build_version_history_table(),
+        "Methodology_Snapshot": build_current_methodology_snapshot_table(),
         "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
         "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
         "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
@@ -2779,6 +2962,7 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     # Lock schemas before running checks so empty fact/audit tables still have stable headers.
     tables = enforce_powerbi_export_schemas(tables)
     tables["PowerBI_Relationship_Checks"] = build_powerbi_relationship_checks(tables, relationship_guide)
+    tables["PowerBI_Schema_Status"] = build_powerbi_schema_status_table(tables)
     preview = build_powerbi_export_preview(tables, list(tables.keys()))
     readiness = build_powerbi_readiness_score(preview)
     tables["PowerBI_Readiness"] = pd.concat([readiness.assign(Section="Score"), preview.assign(Section="Table Check")], ignore_index=True, sort=False)
@@ -3005,7 +3189,8 @@ st.subheader("Export Controls")
 export_mode = st.selectbox("Export mode", ["Power BI Dataset Export", "Full Analysis Workbook", "Summary Only", "Exceptions Only", "Dealer Rate Audit", "Scenario Archive Package"], index=0)
 powerbi_selected_tables = POWERBI_FULL_EXPORT_TABLES.copy()
 if export_mode in ["Power BI Dataset Export", "Scenario Archive Package"]:
-    st.info("Power BI is the primary output. The app now produces one full detailed Power BI export with all required fact, dimension, audit, relationship-check, sheet-map, DAX, report-layout, visual-coverage, pipeline, build-checklist, and handoff tables. Row 1 is always the header row on every exported sheet.")
+    st.info("Power BI is the primary output. The app produces one full detailed Power BI export with locked schemas, all required fact/dimension/audit tables, relationship checks, sheet-name map, DAX starter, report layout, visual coverage matrix, pipeline guide, build checklist, and handoff tables. Row 1 is always the header row on every exported sheet.")
+    st.warning("Power BI pipeline rule: after download, save/rename the file as Rebuild_Analytics_PowerBI_Dataset.xlsx and replace the existing file in the approved SharePoint/OneDrive source folder. Do not change the folder path or final source file name.")
 
 export_reason = st.selectbox("Export reason", ["Manager review", "Dealer review", "Cost benchmarking", "Data validation", "Presentation support", "Other"], index=0)
 export_reason_other = ""
@@ -3350,8 +3535,8 @@ if st.session_state.run_clicked and rebuild_file:
     filter_summary = analysis.get("filter_summary", pd.DataFrame())
     machine_grouping_lookup = analysis.get("machine_grouping_lookup", pd.DataFrame())
 
-    tabs = st.tabs(["Executive Dashboard", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Executive Insights", "Power BI Readiness", "How to Use", "Methodology", "Governance & Dictionary", "Reference"])
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = tabs
+    tabs = st.tabs(["Executive Dashboard", "Machine Detail", "Dealer Performance", "Region Performance", "Exceptions & Data Quality", "Executive Insights", "Power BI Readiness", "How to Use", "Methodology", "Governance & Dictionary", "Reference", "Final Handoff"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = tabs
 
     with tab1:
         st.subheader("Run Summary")
@@ -3574,7 +3759,7 @@ if st.session_state.run_clicked and rebuild_file:
         except Exception:
             pass
         insights.append(f"Cost outliers excluded from core averages: {outlier_count:,}.")
-        insights.append(f"CPT+H cross-type review flags: {cross_count:,}.")
+        insights.append(f"CPT+H cross-type outliers: {cross_count:,}.")
         insights.append(f"Rows using fallback labor rates: {global_year_fallback_count + overall_fallback_count:,}.")
         for insight in insights:
             st.write("•", insight)
@@ -3602,6 +3787,10 @@ if st.session_state.run_clicked and rebuild_file:
         st.write("### Power BI Export Health Check")
         pbi_health = build_powerbi_export_health_summary(pbi_tables, pbi_preview, pbi_tables.get("PowerBI_Relationship_Checks", pd.DataFrame()))
         display_table(pbi_health, number_cols=["Value"])
+        st.write("### Power BI Locked Schema Status")
+        schema_status_table = pbi_tables.get("PowerBI_Schema_Status", build_powerbi_schema_status_table(pbi_tables))
+        display_table(schema_status_table, number_cols=["Rows", "Columns", "Duplicate Headers", "Blank Headers"])
+        st.caption("Header-only audit tables are expected when no rows exist for that category. Header-only tables still preserve schema stability for Power BI refresh.")
         st.write("### Included Power BI Tables")
         display_table(pbi_preview, number_cols=["Rows", "Columns", "Blank Headers", "Duplicate Headers", "Marker Rows"])
         st.write("### Power BI Relationship Checklist")
@@ -3609,10 +3798,12 @@ if st.session_state.run_clicked and rebuild_file:
         st.write("### Machine Grouping Lookup")
         display_table(machine_grouping_lookup)
         st.write("### Scenario Comparison Row")
-        display_table(build_scenario_comparison_table(analysis, scenario_name_value=scenario_name), currency_cols=["Avg Cost"], percent_cols=["Outlier Rate %", "Dealer Rate Coverage %"], number_cols=["Valid Rows", "Total Rows", "Outlier Rows", "Cross-Type Flags"])
+        display_table(build_scenario_comparison_table(analysis, scenario_name_value=scenario_name), currency_cols=["Avg Cost"], percent_cols=["Outlier Rate %", "Dealer Rate Coverage %"], number_cols=["Valid Rows", "Total Rows", "Outlier Rows", "Cross-Type Outliers"])
 
     with tab8:
         st.subheader("How to Use This App")
+        st.write("### Recommended Sample Workflow")
+        display_table(build_sample_workflow_table(), number_cols=["Step"])
         st.markdown("""
         1. Upload the rebuild workbook.
         2. Select the dealer labor-rate source. Built-in expanded 2016–2026 rates are selected by default.
@@ -3631,10 +3822,20 @@ if st.session_state.run_clicked and rebuild_file:
 
     with tab9:
         st.subheader("Methodology")
+        st.write("### Current Methodology Snapshot")
+        display_table(build_current_methodology_snapshot_table())
+        st.write("### What Changed in V18")
+        st.markdown("""
+        - Power BI Dataset Export is the primary downstream output.
+        - Cross-type CPT+H rows above the machine-level CMR benchmark are now treated as outliers.
+        - There is one reported CPT+H value after statistical and cross-type outlier exclusions.
+        - Cross-type outlier rows remain auditable in dedicated Power BI and Excel tables.
+        - Power BI exports use locked schemas, row 1 headers, and year-aware aggregate tables.
+        """)
         st.markdown(METHOD_LOCK_TEXT)
         st.markdown("""**Visual style:** Charts, checkboxes, filter controls, tabs, and workbook headers use a Caterpillar-inspired black, yellow, and gray palette.  
 **Important:** Official Caterpillar logo usage should follow internal brand/asset approval rules.  
-**V16.5 update:** Refines rebuild-type charts so CMR, CPT+H Standard, CPT+H Adjusted, and CPT-O appear as separate sections; adds machine-group average cost by rebuild type; and places separate region-by-rebuild-type charts directly below the machine rebuild-type chart.""")
+**V16.5 update:** Refines rebuild-type charts so CMR, CPT+H Standard, CPT+H, and CPT-O appear as separate sections; adds machine-group average cost by rebuild type; and places separate region-by-rebuild-type charts directly below the machine rebuild-type chart.""")
 
     with tab10:
         st.subheader("Governance & Dictionary")
@@ -3664,6 +3865,10 @@ This section is intended for handoff, auditability, and future maintenance. It e
 
     with tab11:
         st.subheader("Reference")
+        st.write("### Known Power BI Modeling Notes")
+        display_table(build_powerbi_modeling_notes_table())
+        st.write("### Version History")
+        display_table(build_version_history_table())
         st.markdown("""
 Use this section to audit supported rebuild types, configured regions, observed values in the current run, machine grouping, dealer-rate source, and Power BI export references.
 """)
@@ -3725,7 +3930,7 @@ Use this section to audit supported rebuild types, configured regions, observed 
                 if show_adjusted_cpth:
                     adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
                 else:
-                    pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
+                    pd.DataFrame({"Message": ["Reported CPT+H after exclusions is unavailable because both CMR and CPT+H are required for comparison context."]}).to_excel(writer, sheet_name="Reported CPT-H Notes", index=False)
                 machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
                 global_ccr_type_summary.to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
                 region_ccr_type_summary.to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
@@ -3751,7 +3956,7 @@ Use this section to audit supported rebuild types, configured regions, observed 
                 if show_adjusted_cpth:
                     adjusted_summary.to_excel(writer, sheet_name="Adjusted Summary", index=False)
                 else:
-                    pd.DataFrame({"Message": ["Adjusted CPT+H comparison hidden because both CMR and CPT+H are required."]}).to_excel(writer, sheet_name="Adjusted CPT-H Hidden", index=False)
+                    pd.DataFrame({"Message": ["Reported CPT+H after exclusions is unavailable because both CMR and CPT+H are required for comparison context."]}).to_excel(writer, sheet_name="Reported CPT-H Notes", index=False)
                 machine_benchmark_ranking.to_excel(writer, sheet_name="Machine Ranking", index=False)
                 global_ccr_type_summary.to_excel(writer, sheet_name="Global CCR Type Avg", index=False)
                 region_ccr_type_summary.to_excel(writer, sheet_name="Region CCR Type Avg", index=False)
@@ -3789,7 +3994,7 @@ Use this section to audit supported rebuild types, configured regions, observed 
             pbi_preview_for_summary = build_powerbi_export_preview(pbi_tables_for_summary, list(pbi_tables_for_summary.keys()))
             st.write("### Power BI Export Summary")
             display_table(build_powerbi_export_health_summary(pbi_tables_for_summary, pbi_preview_for_summary, pbi_tables_for_summary.get("PowerBI_Relationship_Checks", pd.DataFrame())), number_cols=["Value"])
-            st.info("For the Level 2 Power BI pipeline, save this file as Rebuild_Analytics_PowerBI_Dataset.xlsx and replace the existing file in the approved SharePoint/OneDrive source folder. Keep the file name and path unchanged.")
+            st.warning("IMPORTANT: For the Level 2 Power BI pipeline, save/rename this file as Rebuild_Analytics_PowerBI_Dataset.xlsx and replace the existing file in the approved SharePoint/OneDrive source folder. Keep the final file name and folder path unchanged.")
         except Exception as exc:
             st.warning(f"Power BI export summary could not be generated: {exc}")
     if render_export_acknowledgement("full_export_ack"):
