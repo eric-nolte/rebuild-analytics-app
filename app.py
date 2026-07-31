@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -15,13 +14,13 @@ import altair as alt
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "V19.0"
-APP_LAST_UPDATED = "2026-07-29"
-METHODOLOGY_VERSION = "2026.07-Executive-Insights-V19"
+APP_VERSION = "V19.1"
+APP_LAST_UPDATED = "2026-07-31"
+METHODOLOGY_VERSION = "2026.07-Executive-Actionability-V19.1"
 OUTLIER_RULE_VERSION = "Cost Log-IQR + CPT+H Cross-Type Outlier by Machine"
 DEALER_RATE_VERSION = "Built-in Expanded Dealer Rates 2016-2026"
 SECURITY_CONTROL_VERSION = "Phase 1 Security Controls"
-EXPORT_FORMAT_VERSION = "V19.0 Executive Intelligence & Opportunity Analytics"
+EXPORT_FORMAT_VERSION = "V19.1 Executive Actionability & Score Governance"
 CONFIDENTIALITY_LABEL = ""
 MAX_UPLOAD_MB = 50
 DEFAULT_MAX_ROWS_WARNING = 25000
@@ -32,7 +31,7 @@ POWERBI_FULL_EXPORT_TABLES = [
     "Fact_MachineRegion_RebuildType_AvgCost", "Fact_MachineYear_RebuildType_AvgCost",
     "Fact_RegionYear_RebuildType_AvgCost", "Fact_DealerYear_Performance",
     "Fact_MachineRegionYear_RebuildType_AvgCost", "Fact_Machine_Insights",
-    "Fact_Machine_Ranking", "Fact_Machine_Health", "Fact_Machine_Opportunity", "Fact_Machine_DataQuality", "Fact_Machine_PartsLabor", "Fact_Dealer_PartsLabor", "Fact_Region_PartsLabor", "Fact_Executive_Summary", "Fact_Dealer_Performance", "Fact_Region_Performance",
+    "Fact_Machine_Ranking", "Fact_Machine_Health", "Fact_Machine_Opportunity", "Fact_Machine_DataQuality", "Fact_Machine_PartsLabor", "Fact_Dealer_PartsLabor", "Fact_Region_PartsLabor", "Fact_Executive_Summary", "Fact_Executive_ActionPlan", "Fact_Executive_TopDrivers", "Fact_Score_Explanations", "Fact_Dealer_Performance", "Fact_Region_Performance",
     "Fact_Exception_Rows", "Fact_Outlier_Rows", "Fact_CrossType_Outliers",
     "Fact_Rate_Coverage", "Fact_Data_Quality", "DataQuality_Summary",
     "Dim_Machine", "Dim_Machine_Group", "Dim_Dealer", "Dim_Rebuild_Type", "Dim_Region", "Dim_Service_Year",
@@ -42,7 +41,7 @@ POWERBI_FULL_EXPORT_TABLES = [
     "Export_Mode_Dictionary", "Required_Files", "Testing_Checklist", "Update_Process",
     "Known_Limitations", "Data_Dictionary", "Parameters", "PowerBI_Readiness", "PowerBI_Export_Health",
     "PowerBI_Schema_Status", "PowerBI_Modeling_Notes", "Handoff_Checklist", "Sample_Workflow",
-    "Version_History", "Methodology_Snapshot"
+    "Version_History", "Methodology_Snapshot", "Score_Methodology", "PowerBI_V19_Page_Guidance"
 ]
 DEFAULT_POWERBI_TABLES_STANDARD = POWERBI_FULL_EXPORT_TABLES
 DEFAULT_POWERBI_TABLES_DETAILED = POWERBI_FULL_EXPORT_TABLES
@@ -1325,6 +1324,7 @@ def build_version_history_table():
         {"Version": "V18.4", "Release Theme": "Final handoff and Power BI stabilization", "Key Changes": "Added schema status test, methodology snapshot, modeling notes, handoff checklist, sample workflow, version history, and stronger fixed-source-file instructions."},
         {"Version": "V18.5", "Release Theme": "Final QA and documentation polish", "Key Changes": "Added GitHub README support, golden test workbook guidance, and stronger Excel export header enforcement for all workbook exports."},
         {"Version": "V19.0", "Release Theme": "Executive Intelligence and Opportunity Analytics", "Key Changes": "Added parts-vs-labor analytics, machine opportunity ranking, auto-generated executive summary, insight severity scoring, machine health score, and machine-level data quality score."},
+        {"Version": "V19.1", "Release Theme": "Executive Actionability and Score Governance", "Key Changes": "Added executive action plan, confidence levels, score component explanations, top drivers, V19 Power BI page guidance, and score methodology documentation."},
     ])
 
 def build_powerbi_schema_status_table(tables):
@@ -2047,6 +2047,249 @@ def build_executive_summary_v19(valid_df, processed_df, cost_col, machine_opport
         if not labor_driver.empty:
             r = labor_driver.iloc[0]
             add("Cost Drivers", 2, f"Highest average labor share is {r.get('SALES MODEL')} at {r.get('Avg_Labor_Pct'):.1f}%.", "Medium" if r.get("Avg_Labor_Pct", 0) >= 35 else "Info", "Highest Labor %", r.get("Avg_Labor_Pct"))
+    if processed_df is not None and not processed_df.empty:
+        stat_count = int(processed_df.get("Statistical Cost Outlier Flag", pd.Series(False, index=processed_df.index)).fillna(False).sum())
+        cross_count = int(processed_df.get("Cross-Type Outlier Flag", pd.Series(False, index=processed_df.index)).fillna(False).sum())
+        add("Outliers", 1, f"Excluded rows include {stat_count:,} statistical cost outlier(s) and {cross_count:,} cross-type CPT+H outlier(s).", "High" if cross_count else "Info", "Total Outliers", stat_count + cross_count)
+    return pd.DataFrame(rows).sort_values(["Section", "Order"])
+
+
+# =====================================================
+# V19.1 EXECUTIVE ACTIONABILITY / SCORE GOVERNANCE EXTENSIONS
+# =====================================================
+def _confidence_from_inputs(valid_rows=0, dq_score=100, outlier_rate=0):
+    valid_rows = 0 if pd.isna(valid_rows) else float(valid_rows)
+    dq_score = 100 if pd.isna(dq_score) else float(dq_score)
+    outlier_rate = 0 if pd.isna(outlier_rate) else float(outlier_rate)
+    if valid_rows >= 8 and dq_score >= 90 and outlier_rate <= 10:
+        return "High Confidence"
+    if valid_rows >= 5 and dq_score >= 80 and outlier_rate <= 20:
+        return "Moderate Confidence"
+    return "Limited Confidence"
+
+
+def _confidence_score(valid_rows=0, dq_score=100, outlier_rate=0):
+    valid_rows = 0 if pd.isna(valid_rows) else float(valid_rows)
+    dq_score = 100 if pd.isna(dq_score) else float(dq_score)
+    outlier_rate = 0 if pd.isna(outlier_rate) else float(outlier_rate)
+    sample_component = min(40, valid_rows / 8 * 40)
+    dq_component = min(40, dq_score * 0.40)
+    outlier_component = max(0, 20 - outlier_rate)
+    return round(min(100, sample_component + dq_component + outlier_component), 1)
+
+
+def _primary_driver_from_row(row, component_cols):
+    available = {c: row.get(c, 0) for c in component_cols if c in row.index}
+    if not available:
+        return "Mixed"
+    try:
+        return max(available, key=lambda k: 0 if pd.isna(available[k]) else float(available[k])).replace(" Penalty", "").replace(" Risk", "")
+    except Exception:
+        return "Mixed"
+
+
+def build_machine_health_scores(machine_ranking_df, machine_dq_df):
+    if machine_ranking_df is None or machine_ranking_df.empty:
+        return pd.DataFrame()
+    out = machine_ranking_df.copy()
+    if machine_dq_df is not None and not machine_dq_df.empty and "Data Quality Score" in machine_dq_df.columns:
+        out = out.merge(machine_dq_df[["SALES MODEL", "Data Quality Score", "Data Quality Category"]], on="SALES MODEL", how="left")
+    else:
+        out["Data Quality Score"] = 100
+        out["Data Quality Category"] = "Unknown"
+    cross_col = "Cross_Type_Flags" if "Cross_Type_Flags" in out.columns else "Cross-Type Outliers"
+    if cross_col not in out.columns:
+        out[cross_col] = 0
+    out["Cost Risk"] = out.get("Vs Overall Avg %", pd.Series(0, index=out.index)).clip(lower=0).fillna(0)
+    out["Outlier Risk"] = out.get("Outlier Rate %", pd.Series(0, index=out.index)).fillna(0)
+    out["Dealer Rate Risk"] = out.get("Dealer Rate Exception Rate %", pd.Series(0, index=out.index)).fillna(0)
+    out["Cross-Type Risk"] = out[cross_col].fillna(0)
+    out["Data Quality Risk"] = 100 - out["Data Quality Score"].fillna(100)
+    out["Cost Penalty"] = (out["Cost Risk"] * 0.25).round(2)
+    out["Outlier Penalty"] = (out["Outlier Risk"] * 0.40).round(2)
+    out["Dealer Rate Penalty"] = (out["Dealer Rate Risk"] * 0.25).round(2)
+    out["Cross-Type Penalty"] = (out["Cross-Type Risk"] * 2.00).round(2)
+    out["Data Quality Penalty"] = (out["Data Quality Risk"] * 0.50).round(2)
+    out["Health Score"] = (100 - out[["Cost Penalty", "Outlier Penalty", "Dealer Rate Penalty", "Cross-Type Penalty", "Data Quality Penalty"]].sum(axis=1)).clip(lower=0, upper=100).round(1)
+    out["Health Category"] = out["Health Score"].apply(_health_category_from_score)
+    out["Health Score Rank"] = out["Health Score"].rank(ascending=False, method="dense").astype(int)
+    out["Primary Health Driver"] = out.apply(lambda r: _primary_driver_from_row(r, ["Cost Penalty", "Outlier Penalty", "Dealer Rate Penalty", "Cross-Type Penalty", "Data Quality Penalty"]), axis=1)
+    out["Confidence Score"] = out.apply(lambda r: _confidence_score(r.get("Valid_Rows", 0), r.get("Data Quality Score", 100), r.get("Outlier Rate %", 0)), axis=1)
+    out["Confidence Level"] = out.apply(lambda r: _confidence_from_inputs(r.get("Valid_Rows", 0), r.get("Data Quality Score", 100), r.get("Outlier Rate %", 0)), axis=1)
+    cols = ["SALES MODEL", "Health Score", "Health Category", "Health Score Rank", "Confidence Score", "Confidence Level", "Primary Health Driver", "Cost Risk", "Outlier Risk", "Dealer Rate Risk", "Cross-Type Risk", "Data Quality Risk", "Cost Penalty", "Outlier Penalty", "Dealer Rate Penalty", "Cross-Type Penalty", "Data Quality Penalty", "Data Quality Score", "Data Quality Category"]
+    return out[[c for c in cols if c in out.columns]].sort_values(["Health Score", "SALES MODEL"], ascending=[False, True])
+
+
+def build_machine_opportunity_ranking(machine_ranking_df, machine_dq_df=None, machine_health_df=None):
+    if machine_ranking_df is None or machine_ranking_df.empty:
+        return pd.DataFrame()
+    out = machine_ranking_df.copy()
+    if machine_dq_df is not None and not machine_dq_df.empty and "Data Quality Score" in machine_dq_df.columns:
+        out = out.merge(machine_dq_df[["SALES MODEL", "Data Quality Score"]], on="SALES MODEL", how="left")
+    else:
+        out["Data Quality Score"] = 100
+    if machine_health_df is not None and not machine_health_df.empty and "Health Score" in machine_health_df.columns:
+        keep_cols = [c for c in ["SALES MODEL", "Health Score", "Health Category", "Confidence Score", "Confidence Level"] if c in machine_health_df.columns]
+        out = out.merge(machine_health_df[keep_cols], on="SALES MODEL", how="left")
+    cross_col = "Cross_Type_Flags" if "Cross_Type_Flags" in out.columns else "Cross-Type Outliers"
+    if cross_col not in out.columns:
+        out[cross_col] = 0
+    out["Cost Component"] = out.get("Vs Overall Avg %", pd.Series(0, index=out.index)).clip(lower=0).fillna(0)
+    out["Outlier Component"] = out.get("Outlier Rate %", pd.Series(0, index=out.index)).fillna(0)
+    out["Dealer Rate Component"] = out.get("Dealer Rate Exception Rate %", pd.Series(0, index=out.index)).fillna(0)
+    out["Cross-Type Component"] = out[cross_col].fillna(0) * 10
+    out["Data Quality Component"] = (100 - out["Data Quality Score"].fillna(100))
+    out["Weighted Cost Component"] = out["Cost Component"] * 0.40
+    out["Weighted Outlier Component"] = out["Outlier Component"] * 0.25
+    out["Weighted Dealer Rate Component"] = out["Dealer Rate Component"] * 0.10
+    out["Weighted Cross-Type Component"] = out["Cross-Type Component"] * 0.15
+    out["Weighted Data Quality Component"] = out["Data Quality Component"] * 0.10
+    out["Opportunity Score"] = out[["Weighted Cost Component", "Weighted Outlier Component", "Weighted Dealer Rate Component", "Weighted Cross-Type Component", "Weighted Data Quality Component"]].sum(axis=1).clip(lower=0, upper=100).round(1)
+    out["Opportunity Rank"] = out["Opportunity Score"].rank(ascending=False, method="dense").astype(int)
+    out["Opportunity Category"] = out["Opportunity Score"].apply(_opportunity_category_from_score)
+    out["Opportunity Driver"] = out.apply(lambda r: _primary_driver_from_row(r, ["Weighted Cost Component", "Weighted Outlier Component", "Weighted Dealer Rate Component", "Weighted Cross-Type Component", "Weighted Data Quality Component"]), axis=1)
+    if "Confidence Level" not in out.columns:
+        out["Confidence Score"] = out.apply(lambda r: _confidence_score(r.get("Valid_Rows", 0), r.get("Data Quality Score", 100), r.get("Outlier Rate %", 0)), axis=1)
+        out["Confidence Level"] = out.apply(lambda r: _confidence_from_inputs(r.get("Valid_Rows", 0), r.get("Data Quality Score", 100), r.get("Outlier Rate %", 0)), axis=1)
+    return out.sort_values(["Opportunity Score", "Avg_Cost"], ascending=False)
+
+
+def build_score_explanations(machine_health_df, machine_opportunity_df):
+    rows = []
+    if machine_health_df is not None and not machine_health_df.empty:
+        for _, r in machine_health_df.iterrows():
+            for component, desc in [
+                ("Cost Penalty", "Penalty from cost above overall benchmark"),
+                ("Outlier Penalty", "Penalty from outlier rate"),
+                ("Dealer Rate Penalty", "Penalty from dealer-rate exception rate"),
+                ("Cross-Type Penalty", "Penalty from cross-type CPT+H outliers"),
+                ("Data Quality Penalty", "Penalty from machine-level data quality risk"),
+            ]:
+                rows.append({"SALES MODEL": r.get("SALES MODEL"), "Score Name": "Machine Health Score", "Component": component, "Component Value": r.get(component, np.nan), "Explanation": desc, "Primary Driver": r.get("Primary Health Driver", "Mixed"), "Score Value": r.get("Health Score", np.nan), "Score Category": r.get("Health Category", "Unknown"), "Confidence Level": r.get("Confidence Level", "Unknown")})
+    if machine_opportunity_df is not None and not machine_opportunity_df.empty:
+        for _, r in machine_opportunity_df.iterrows():
+            for component, desc in [
+                ("Weighted Cost Component", "Weighted contribution from cost above benchmark"),
+                ("Weighted Outlier Component", "Weighted contribution from outlier rate"),
+                ("Weighted Dealer Rate Component", "Weighted contribution from dealer-rate exceptions"),
+                ("Weighted Cross-Type Component", "Weighted contribution from cross-type outliers"),
+                ("Weighted Data Quality Component", "Weighted contribution from data quality risk"),
+            ]:
+                rows.append({"SALES MODEL": r.get("SALES MODEL"), "Score Name": "Opportunity Score", "Component": component, "Component Value": r.get(component, np.nan), "Explanation": desc, "Primary Driver": r.get("Opportunity Driver", "Mixed"), "Score Value": r.get("Opportunity Score", np.nan), "Score Category": r.get("Opportunity Category", "Unknown"), "Confidence Level": r.get("Confidence Level", "Unknown")})
+    return pd.DataFrame(rows)
+
+
+def build_executive_action_plan(machine_opportunity_df, machine_health_df, machine_dq_df, machine_parts_labor_df):
+    rows = []
+    def add(machine, issue, action, priority, metric, value, owner="Business / Product Support", next_step="Review supporting rows and validate with business owner"):
+        rows.append({"SALES MODEL": machine, "Issue": issue, "Recommended Action": action, "Priority": priority, "Supporting Metric": metric, "Metric Value": value, "Owner": owner, "Suggested Next Step": next_step})
+    if machine_opportunity_df is not None and not machine_opportunity_df.empty:
+        for _, r in machine_opportunity_df.sort_values("Opportunity Score", ascending=False).head(10).iterrows():
+            priority = r.get("Opportunity Category", "Medium")
+            add(r.get("SALES MODEL"), f"Opportunity score is {r.get('Opportunity Score', np.nan):.1f}", f"Investigate primary opportunity driver: {r.get('Opportunity Driver', 'Mixed')}", priority, "Opportunity Score", r.get("Opportunity Score", np.nan), next_step="Open Machine Detail and Exceptions pages for this machine")
+    if machine_health_df is not None and not machine_health_df.empty:
+        low = machine_health_df[machine_health_df["Health Score"] < 70]
+        for _, r in low.sort_values("Health Score").head(10).iterrows():
+            add(r.get("SALES MODEL"), f"Machine health category is {r.get('Health Category')}", f"Review health driver: {r.get('Primary Health Driver', 'Mixed')}", "High" if r.get("Health Score", 100) < 60 else "Medium", "Health Score", r.get("Health Score", np.nan), next_step="Review health score component breakdown and outlier audit")
+    if machine_dq_df is not None and not machine_dq_df.empty:
+        poor = machine_dq_df[machine_dq_df["Data Quality Score"] < 85]
+        for _, r in poor.sort_values("Data Quality Score").head(10).iterrows():
+            add(r.get("SALES MODEL"), f"Data quality score is {r.get('Data Quality Score', np.nan):.1f}", "Validate dealer code, rate coverage, region, SMU, and fallback FX issues", "Medium", "Data Quality Score", r.get("Data Quality Score", np.nan), owner="Data Owner / Analyst", next_step="Review Fact_Machine_DataQuality and Fact_Exception_Rows")
+    if machine_parts_labor_df is not None and not machine_parts_labor_df.empty and "Avg_Labor_Pct" in machine_parts_labor_df.columns:
+        labor = machine_parts_labor_df[machine_parts_labor_df["Avg_Labor_Pct"] >= 35]
+        for _, r in labor.sort_values("Avg_Labor_Pct", ascending=False).head(10).iterrows():
+            add(r.get("SALES MODEL"), f"High average labor share at {r.get('Avg_Labor_Pct', np.nan):.1f}%", "Review labor hours, dealer rate assumptions, and labor process variance", "Medium", "Avg Labor %", r.get("Avg_Labor_Pct", np.nan), owner="Dealer / Product Support", next_step="Compare labor share by dealer and region")
+    return pd.DataFrame(rows).drop_duplicates(subset=["SALES MODEL", "Issue", "Recommended Action"], keep="first") if rows else pd.DataFrame(columns=["SALES MODEL", "Issue", "Recommended Action", "Priority", "Supporting Metric", "Metric Value", "Owner", "Suggested Next Step"])
+
+
+def build_executive_top_drivers(valid_df, processed_df, cost_col, machine_opportunity_df, machine_health_df, machine_parts_labor_df, dealer_parts_labor_df, region_parts_labor_df, machine_dq_df):
+    rows = []
+    def add(category, driver, detail, severity="Info", metric="", value=np.nan):
+        rows.append({"Driver Category": category, "Top Driver": driver, "Detail": detail, "Severity": severity, "Metric Name": metric, "Metric Value": value})
+    if machine_opportunity_df is not None and not machine_opportunity_df.empty:
+        r = machine_opportunity_df.sort_values("Opportunity Score", ascending=False).iloc[0]
+        add("Opportunity", r.get("SALES MODEL"), f"Highest opportunity score: {r.get('Opportunity Score'):.1f}; primary driver: {r.get('Opportunity Driver')}; confidence: {r.get('Confidence Level', 'Unknown')}", r.get("Opportunity Category", "High"), "Opportunity Score", r.get("Opportunity Score"))
+    if machine_health_df is not None and not machine_health_df.empty:
+        r = machine_health_df.sort_values("Health Score").iloc[0]
+        add("Machine Health", r.get("SALES MODEL"), f"Lowest machine health score: {r.get('Health Score'):.1f}; primary driver: {r.get('Primary Health Driver')}; confidence: {r.get('Confidence Level', 'Unknown')}", "High" if r.get("Health Score", 100) < 70 else "Info", "Health Score", r.get("Health Score"))
+    if machine_parts_labor_df is not None and not machine_parts_labor_df.empty:
+        r = machine_parts_labor_df.sort_values("Avg_Labor_Pct", ascending=False).iloc[0]
+        add("Labor Share", r.get("SALES MODEL"), f"Highest average labor share: {r.get('Avg_Labor_Pct'):.1f}%", "Medium" if r.get("Avg_Labor_Pct", 0) >= 35 else "Info", "Avg Labor %", r.get("Avg_Labor_Pct"))
+        r2 = machine_parts_labor_df.sort_values("Avg_Parts_Pct", ascending=False).iloc[0]
+        add("Parts Share", r2.get("SALES MODEL"), f"Highest average parts share: {r2.get('Avg_Parts_Pct'):.1f}%", "Info", "Avg Parts %", r2.get("Avg_Parts_Pct"))
+    if dealer_parts_labor_df is not None and not dealer_parts_labor_df.empty and "Avg_Labor_Pct" in dealer_parts_labor_df.columns:
+        r = dealer_parts_labor_df.sort_values("Avg_Labor_Pct", ascending=False).iloc[0]
+        add("Dealer Labor Share", r.get("DEALER"), f"Dealer with highest average labor share: {r.get('Avg_Labor_Pct'):.1f}%", "Medium" if r.get("Avg_Labor_Pct", 0) >= 35 else "Info", "Dealer Avg Labor %", r.get("Avg_Labor_Pct"))
+    if region_parts_labor_df is not None and not region_parts_labor_df.empty and "Avg_Cost" in region_parts_labor_df.columns:
+        r = region_parts_labor_df.sort_values("Avg_Cost", ascending=False).iloc[0]
+        add("Region Cost", r.get("Region"), f"Highest region average total cost: {money(r.get('Avg_Cost'))}", "Medium", "Region Avg Cost", r.get("Avg_Cost"))
+    if machine_dq_df is not None and not machine_dq_df.empty:
+        r = machine_dq_df.sort_values("Data Quality Score").iloc[0]
+        add("Data Quality", r.get("SALES MODEL"), f"Lowest machine data quality score: {r.get('Data Quality Score'):.1f} ({r.get('Data Quality Category')})", "High" if r.get("Data Quality Score", 100) < 80 else "Medium", "Data Quality Score", r.get("Data Quality Score"))
+    if processed_df is not None and not processed_df.empty:
+        cross_count = int(processed_df.get("Cross-Type Outlier Flag", pd.Series(False, index=processed_df.index)).fillna(False).sum())
+        add("Cross-Type Outliers", "CPT+H Benchmark Rule", f"{cross_count:,} cross-type CPT+H outlier row(s) were excluded and retained for audit.", "High" if cross_count else "Info", "Cross-Type Outliers", cross_count)
+    return pd.DataFrame(rows)
+
+
+def build_score_methodology_table():
+    return pd.DataFrame([
+        {"Score Name": "Machine Health Score", "Purpose": "Summarize machine performance quality after cost, outlier, rate, cross-type, and data-quality penalties.", "Inputs": "Cost Risk, Outlier Risk, Dealer Rate Risk, Cross-Type Risk, Data Quality Risk", "Weighting Logic": "100 minus weighted penalties: Cost 0.25, Outlier 0.40, Dealer Rate 0.25, Cross-Type 2.00 per event, Data Quality 0.50", "Category Thresholds": "90+ Excellent; 80-89 Good; 70-79 Fair; 60-69 Watch; <60 Needs Review", "Interpretation": "Higher is better. Low scores indicate machines needing operational or data review.", "Limitations": "Score is directional and should be reviewed with sample size and confidence level."},
+        {"Score Name": "Opportunity Score", "Purpose": "Rank machines by business review priority and potential improvement opportunity.", "Inputs": "Cost above benchmark, Outlier Rate, Dealer Rate Exception Rate, Cross-Type Outliers, Data Quality Risk", "Weighting Logic": "Cost 40%, Outlier 25%, Dealer Rate 10%, Cross-Type 15%, Data Quality 10%", "Category Thresholds": "90+ Critical; 75-89 High; 50-74 Medium; <50 Low", "Interpretation": "Higher scores indicate larger review opportunity.", "Limitations": "Not a guaranteed savings value; should be interpreted with confidence and sample size."},
+        {"Score Name": "Data Quality Score", "Purpose": "Assess machine-level input and processing quality risk.", "Inputs": "Missing dealer code, Dealer rate exceptions, SMU 0/1, fallback FX, unknown regions, outlier rows", "Weighting Logic": "Starts at 100 and subtracts bounded penalties by issue rate.", "Category Thresholds": "95+ Excellent; 90-94 Good; 80-89 Fair; <80 Needs Review", "Interpretation": "Higher is better. Low scores mean output should be interpreted cautiously.", "Limitations": "Does not prove source accuracy; it checks known app-level data quality indicators."},
+        {"Score Name": "Confidence Level", "Purpose": "Qualify how much confidence users should place in machine-level scores.", "Inputs": "Valid row count, Data Quality Score, Outlier Rate", "Weighting Logic": "High Confidence requires 8+ valid rows, DQ >=90, and outlier rate <=10%; Moderate requires 5+ valid rows, DQ >=80, and outlier rate <=20%; else Limited.", "Category Thresholds": "High Confidence; Moderate Confidence; Limited Confidence", "Interpretation": "Use confidence level before acting on Opportunity or Health scores.", "Limitations": "Confidence is based on available analytics fields and may not capture all business context."},
+        {"Score Name": "Insight Severity", "Purpose": "Prioritize generated insights for executive review.", "Inputs": "Opportunity Score, Health Score, Outlier Rate, Data Quality Score", "Weighting Logic": "Critical/High/Medium/Low thresholds based on cost/opportunity, health, DQ, and outlier risk.", "Category Thresholds": "Critical, High, Medium, Low", "Interpretation": "Severity controls review priority for generated observations.", "Limitations": "Severity is an aid for triage and does not replace business validation."},
+    ])
+
+
+def build_v19_powerbi_page_guidance_table():
+    return pd.DataFrame([
+        {"Power BI Page": "Executive Intelligence", "Visual / Section": "Executive Summary", "Recommended Table": "Fact_Executive_Summary", "Visual Type": "Table or multi-row card", "Fields": "Section, Executive Summary, Severity, Metric Name, Metric Value", "Recommended Slicers": "Run ID, Scenario Name", "Sort": "Section then Order", "Notes": "Use this as the management-ready narrative layer."},
+        {"Power BI Page": "Executive Intelligence", "Visual / Section": "Top Drivers", "Recommended Table": "Fact_Executive_TopDrivers", "Visual Type": "Table", "Fields": "Driver Category, Top Driver, Detail, Severity, Metric Value", "Recommended Slicers": "Severity, Driver Category", "Sort": "Severity then Driver Category", "Notes": "Summarizes the primary drivers behind opportunity, health, parts/labor, and data quality."},
+        {"Power BI Page": "Executive Intelligence", "Visual / Section": "Executive Action Plan", "Recommended Table": "Fact_Executive_ActionPlan", "Visual Type": "Table", "Fields": "SALES MODEL, Issue, Recommended Action, Priority, Owner, Suggested Next Step", "Recommended Slicers": "Priority, Owner, SALES MODEL", "Sort": "Priority then Metric Value descending", "Notes": "Turns analytics into next steps."},
+        {"Power BI Page": "Executive Intelligence", "Visual / Section": "Machine Opportunity Ranking", "Recommended Table": "Fact_Machine_Opportunity", "Visual Type": "Bar chart and table", "Fields": "SALES MODEL, Opportunity Score, Opportunity Rank, Opportunity Category, Opportunity Driver, Confidence Level", "Recommended Slicers": "Opportunity Category, Confidence Level, Machine Group", "Sort": "Opportunity Score descending", "Notes": "Use Confidence Level to avoid overreacting to low-sample machines."},
+        {"Power BI Page": "Executive Intelligence", "Visual / Section": "Machine Health Score", "Recommended Table": "Fact_Machine_Health", "Visual Type": "Bar chart", "Fields": "SALES MODEL, Health Score, Health Category, Primary Health Driver, Confidence Level", "Recommended Slicers": "Health Category, Confidence Level", "Sort": "Health Score ascending", "Notes": "Lower health scores should be reviewed first."},
+        {"Power BI Page": "Executive Intelligence", "Visual / Section": "Score Explanations", "Recommended Table": "Fact_Score_Explanations", "Visual Type": "Matrix", "Fields": "SALES MODEL, Score Name, Component, Component Value, Explanation", "Recommended Slicers": "Score Name, SALES MODEL", "Sort": "Component Value descending", "Notes": "Shows why the score was calculated the way it was."},
+        {"Power BI Page": "Executive Intelligence", "Visual / Section": "Parts vs Labor", "Recommended Table": "Fact_Machine_PartsLabor", "Visual Type": "Stacked or clustered bar chart", "Fields": "SALES MODEL, Avg_Parts_Pct, Avg_Labor_Pct, Dominant Cost Driver", "Recommended Slicers": "Machine Group, SALES MODEL", "Sort": "Avg_Labor_Pct descending", "Notes": "Use to identify labor-heavy or parts-heavy machines."},
+        {"Power BI Page": "Definitions & Methodology", "Visual / Section": "Score Methodology", "Recommended Table": "Score_Methodology", "Visual Type": "Table", "Fields": "Score Name, Purpose, Inputs, Weighting Logic, Category Thresholds, Interpretation, Limitations", "Recommended Slicers": "Score Name", "Sort": "Score Name", "Notes": "Use this to document governance around V19 scores."},
+    ])
+
+
+def build_executive_summary_v19(valid_df, processed_df, cost_col, machine_opportunity_df, machine_health_df, machine_parts_labor_df, machine_dq_df):
+    rows = []
+    def add(section, order, text, severity="Info", metric_name="", metric_value=np.nan):
+        rows.append({"Section": section, "Order": order, "Executive Summary": text, "Severity": severity, "Metric Name": metric_name, "Metric Value": metric_value})
+    if valid_df is None or valid_df.empty:
+        return pd.DataFrame(columns=["Section", "Order", "Executive Summary", "Severity", "Metric Name", "Metric Value"])
+    total_rows = len(processed_df) if processed_df is not None else len(valid_df)
+    avg_cost = valid_df[cost_col].mean()
+    add("Overview", 1, f"{len(valid_df):,} valid rebuild row(s) are included after excluding statistical and cross-type outliers from {total_rows:,} processed row(s).", "Info", "Valid Rows", len(valid_df))
+    add("Overview", 2, f"Average reported rebuild cost is {money(avg_cost)} based on the selected analysis cost basis.", "Info", "Average Cost", avg_cost)
+    if machine_opportunity_df is not None and not machine_opportunity_df.empty:
+        top = machine_opportunity_df.sort_values("Opportunity Score", ascending=False).iloc[0]
+        add("Opportunity", 1, f"Top opportunity machine is {top.get('SALES MODEL')} with an Opportunity Score of {top.get('Opportunity Score'):.1f} ({top.get('Opportunity Category')}) and {top.get('Confidence Level', 'Unknown').lower()}.", top.get("Opportunity Category", "High"), "Top Opportunity Score", top.get("Opportunity Score"))
+    if machine_health_df is not None and not machine_health_df.empty:
+        avg_health = machine_health_df["Health Score"].mean()
+        low = machine_health_df[machine_health_df["Health Score"] < 70]
+        add("Machine Health", 1, f"Average Machine Health Score is {avg_health:.1f}. {len(low):,} machine(s) are below 70 and should be reviewed.", "High" if len(low) else "Info", "Average Machine Health Score", avg_health)
+    if machine_dq_df is not None and not machine_dq_df.empty:
+        avg_dq = machine_dq_df["Data Quality Score"].mean()
+        add("Data Quality", 1, f"Average machine-level Data Quality Score is {avg_dq:.1f}.", "Info" if avg_dq >= 90 else "Medium", "Average Machine Data Quality Score", avg_dq)
+    if machine_parts_labor_df is not None and not machine_parts_labor_df.empty:
+        parts_total = machine_parts_labor_df["Total_Parts_Cost"].sum()
+        labor_total = machine_parts_labor_df["Total_Labor_Cost"].sum()
+        total_cost = parts_total + labor_total
+        parts_pct = _safe_ratio(parts_total, total_cost, 100)
+        labor_pct = _safe_ratio(labor_total, total_cost, 100)
+        add("Cost Drivers", 1, f"Parts represent {parts_pct:.1f}% and labor represents {labor_pct:.1f}% of valid rebuild cost in this run.", "Info", "Parts %", parts_pct)
+        labor_driver = machine_parts_labor_df.sort_values("Avg_Labor_Pct", ascending=False).head(1)
+        if not labor_driver.empty:
+            r = labor_driver.iloc[0]
+            add("Top Drivers", 1, f"Highest labor-share machine is {r.get('SALES MODEL')} at {r.get('Avg_Labor_Pct'):.1f}% labor cost.", "Medium" if r.get("Avg_Labor_Pct", 0) >= 35 else "Info", "Highest Labor %", r.get("Avg_Labor_Pct"))
+        parts_driver = machine_parts_labor_df.sort_values("Avg_Parts_Pct", ascending=False).head(1)
+        if not parts_driver.empty:
+            r = parts_driver.iloc[0]
+            add("Top Drivers", 2, f"Highest parts-share machine is {r.get('SALES MODEL')} at {r.get('Avg_Parts_Pct'):.1f}% parts cost.", "Info", "Highest Parts %", r.get("Avg_Parts_Pct"))
     if processed_df is not None and not processed_df.empty:
         stat_count = int(processed_df.get("Statistical Cost Outlier Flag", pd.Series(False, index=processed_df.index)).fillna(False).sum())
         cross_count = int(processed_df.get("Cross-Type Outlier Flag", pd.Series(False, index=processed_df.index)).fillna(False).sum())
@@ -2908,13 +3151,18 @@ def get_powerbi_export_schema(table_name, cost_col=None):
         "Fact_DealerYear_Performance": ["Run ID", "Scenario Name", "SALES MODEL", "Dealer Code", "DEALER", "Region", "Service Year", "Avg_Cost", "Avg_SMU", "Count", "Total_Rows", "Outlier_Rows", "Outlier Rate %", "Dealer_Rate_Exception_Rows", "Dealer Rate Exception Rate %", "Data_Quality_Rows", "Data Quality Rate %"],
         "Fact_Machine_Insights": ["Run ID", "Scenario Name", "SALES MODEL", "Machine Group", "Insight Category", "Insight Text", "Metric Name", "Metric Value", "Priority"],
         "Fact_Machine_Ranking": ["Run ID", "Scenario Name", "SALES MODEL", "Avg_Cost", "Avg_SMU", "Valid_Rows", "Total_Rows", "Outlier_Rows", "Outlier Rate %", "Dealer_Rate_Exception_Rows", "Dealer Rate Exception Rate %", "Cross_Type_Flags", "Vs Overall Avg %", "Priority Score", "Priority Label"],
-        "Fact_Machine_Health": ["Run ID", "Scenario Name", "SALES MODEL", "Health Score", "Health Category", "Health Score Rank", "Cost Risk", "Outlier Risk", "Dealer Rate Risk", "Cross-Type Risk", "Data Quality Risk", "Data Quality Score", "Data Quality Category"],
-        "Fact_Machine_Opportunity": ["Run ID", "Scenario Name", "SALES MODEL", "Avg_Cost", "Avg_SMU", "Valid_Rows", "Total_Rows", "Outlier_Rows", "Outlier Rate %", "Dealer_Rate_Exception_Rows", "Dealer Rate Exception Rate %", "Cross_Type_Flags", "Vs Overall Avg %", "Data Quality Score", "Health Score", "Health Category", "Opportunity Score", "Opportunity Rank", "Opportunity Category", "Opportunity Driver"],
+        "Fact_Machine_Health": ["Run ID", "Scenario Name", "SALES MODEL", "Health Score", "Health Category", "Health Score Rank", "Confidence Score", "Confidence Level", "Primary Health Driver", "Cost Risk", "Outlier Risk", "Dealer Rate Risk", "Cross-Type Risk", "Data Quality Risk", "Cost Penalty", "Outlier Penalty", "Dealer Rate Penalty", "Cross-Type Penalty", "Data Quality Penalty", "Data Quality Score", "Data Quality Category"],
+        "Fact_Machine_Opportunity": ["Run ID", "Scenario Name", "SALES MODEL", "Avg_Cost", "Avg_SMU", "Valid_Rows", "Total_Rows", "Outlier_Rows", "Outlier Rate %", "Dealer_Rate_Exception_Rows", "Dealer Rate Exception Rate %", "Cross_Type_Flags", "Vs Overall Avg %", "Data Quality Score", "Health Score", "Health Category", "Confidence Score", "Confidence Level", "Cost Component", "Outlier Component", "Dealer Rate Component", "Cross-Type Component", "Data Quality Component", "Weighted Cost Component", "Weighted Outlier Component", "Weighted Dealer Rate Component", "Weighted Cross-Type Component", "Weighted Data Quality Component", "Opportunity Score", "Opportunity Rank", "Opportunity Category", "Opportunity Driver"],
         "Fact_Machine_DataQuality": ["Run ID", "Scenario Name", "SALES MODEL", "Total_Rows", "Missing Dealer Code Rows", "Dealer Rate Exception Rows", "SMU 0 or 1 Rows", "Fallback FX Rows", "Unknown/Other Region Rows", "Outlier Rows", "Data Quality Score", "Data Quality Category"],
         "Fact_Machine_PartsLabor": ["Run ID", "Scenario Name", "SALES MODEL", "Avg_Cost", "Avg_Parts_Cost", "Avg_Labor_Cost", "Avg_Parts_Pct", "Avg_Labor_Pct", "Avg_Parts_to_Labor_Ratio", "Total_Parts_Cost", "Total_Labor_Cost", "Count", "Dominant Cost Driver"],
         "Fact_Dealer_PartsLabor": ["Run ID", "Scenario Name", "Dealer Code", "DEALER", "Region", "Avg_Cost", "Avg_Parts_Cost", "Avg_Labor_Cost", "Avg_Parts_Pct", "Avg_Labor_Pct", "Avg_Parts_to_Labor_Ratio", "Total_Parts_Cost", "Total_Labor_Cost", "Count", "Dominant Cost Driver"],
         "Fact_Region_PartsLabor": ["Run ID", "Scenario Name", "Region", "Avg_Cost", "Avg_Parts_Cost", "Avg_Labor_Cost", "Avg_Parts_Pct", "Avg_Labor_Pct", "Avg_Parts_to_Labor_Ratio", "Total_Parts_Cost", "Total_Labor_Cost", "Count", "Dominant Cost Driver"],
         "Fact_Executive_Summary": ["Run ID", "Scenario Name", "Section", "Order", "Executive Summary", "Severity", "Metric Name", "Metric Value"],
+        "Fact_Executive_ActionPlan": ["Run ID", "Scenario Name", "SALES MODEL", "Issue", "Recommended Action", "Priority", "Supporting Metric", "Metric Value", "Owner", "Suggested Next Step"],
+        "Fact_Executive_TopDrivers": ["Run ID", "Scenario Name", "Driver Category", "Top Driver", "Detail", "Severity", "Metric Name", "Metric Value"],
+        "Fact_Score_Explanations": ["Run ID", "Scenario Name", "SALES MODEL", "Score Name", "Component", "Component Value", "Explanation", "Primary Driver", "Score Value", "Score Category", "Confidence Level"],
+        "Score_Methodology": ["Score Name", "Purpose", "Inputs", "Weighting Logic", "Category Thresholds", "Interpretation", "Limitations"],
+        "PowerBI_V19_Page_Guidance": ["Power BI Page", "Visual / Section", "Recommended Table", "Visual Type", "Fields", "Recommended Slicers", "Sort", "Notes"],
         "Fact_Dealer_Performance": ["Run ID", "Scenario Name", "SALES MODEL", "Dealer Code", "DEALER", "Region", "Avg_Cost", "Avg_SMU", "Count", "Cross_Type_Flags", "Dealer_Rate_Exception_Rows", "Data_Quality_Rows", "Total_Rows", "Outlier_Rows", "Outlier Rate %", "Cross Flag Rate %", "Dealer Rate Exception Rate %", "Data Quality Rate %", "Vs Overall Avg %", "Performance Score", "Performance Label"],
         "Fact_Region_Performance": ["Run ID", "Scenario Name", "SALES MODEL", "Region", "Avg_Cost", "Avg_SMU", "Count", "Cross_Type_Flags", "Data_Quality_Rows", "Total_Rows", "Outlier_Rows", "Outlier Rate %", "Vs Overall Avg %"],
         "Fact_Exception_Rows": ["Run ID", "Scenario Name", "SALES MODEL", "DEALER", "Dealer Code", "Region", "CCR TYPE", "Service Year", "Exception Type", "Exception Detail", "Cost", "SMU AT REBUILD"],
@@ -3121,9 +3369,12 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
     fact_dealer_partslabor = _add_run_columns(analysis.get("dealer_parts_labor", pd.DataFrame()).copy(), run_id, scenario_label)
     fact_region_partslabor = _add_run_columns(analysis.get("region_parts_labor", pd.DataFrame()).copy(), run_id, scenario_label)
     fact_executive_summary = _add_run_columns(analysis.get("executive_summary_v19", pd.DataFrame()).copy(), run_id, scenario_label)
+    fact_executive_action_plan = _add_run_columns(analysis.get("executive_action_plan", pd.DataFrame()).copy(), run_id, scenario_label)
+    fact_executive_top_drivers = _add_run_columns(analysis.get("executive_top_drivers", pd.DataFrame()).copy(), run_id, scenario_label)
+    fact_score_explanations = _add_run_columns(analysis.get("score_explanations", pd.DataFrame()).copy(), run_id, scenario_label)
 
     run_metadata = analysis.get("metadata", pd.DataFrame()).copy()
-    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V19.0 Executive Intelligence Export", "Power BI is the primary output. V19 adds executive intelligence, opportunity analytics, parts-vs-labor analytics, machine health scores, machine data quality scores, severity scoring, and auto-generated executive summaries. All sheets are clean tables with headers on row 1. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
+    additional_metadata = pd.DataFrame({"Field": ["Run ID", "Scenario Name", "Export Mode", "Export Reason", "Power BI Export Format", "Power BI Notes", "Generated Timestamp"], "Value": [run_id, scenario_label, "Power BI Dataset Export", export_reason_value, "V19.1 Executive Actionability Export", "Power BI is the primary output. V19.1 adds executive action planning, confidence levels, score component explanations, top-driver summaries, V19 Power BI page guidance, score methodology documentation, and the V19 executive intelligence tables. All sheets are clean tables with headers on row 1. Cross-type CPT+H exceptions are treated as outliers and audited in Fact_CrossType_Outliers.", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]})
     run_metadata = pd.concat([additional_metadata, run_metadata], ignore_index=True)
 
     relationship_guide = pd.DataFrame({
@@ -3180,6 +3431,8 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         {"From Table": "Fact_Machine_PartsLabor", "From Column": "SALES MODEL", "To Table": "Dim_Machine", "To Column": "SALES MODEL", "Cardinality": "Many-to-one (*:1)", "Cross Filter Direction": "Single", "Active": "Yes", "Relationship Notes": "V19 machine parts/labor table responds to machine slicers"},
         {"From Table": "Fact_Dealer_PartsLabor", "From Column": "Dealer Code", "To Table": "Dim_Dealer", "To Column": "Dealer Code", "Cardinality": "Many-to-one (*:1)", "Cross Filter Direction": "Single", "Active": "Yes", "Relationship Notes": "V19 dealer parts/labor table responds to dealer slicers"},
         {"From Table": "Fact_Region_PartsLabor", "From Column": "Region", "To Table": "Dim_Region", "To Column": "Region", "Cardinality": "Many-to-one (*:1)", "Cross Filter Direction": "Single", "Active": "Yes", "Relationship Notes": "V19 region parts/labor table responds to region slicers"},
+        {"From Table": "Fact_Executive_ActionPlan", "From Column": "SALES MODEL", "To Table": "Dim_Machine", "To Column": "SALES MODEL", "Cardinality": "Many-to-one (*:1)", "Cross Filter Direction": "Single", "Active": "Yes", "Relationship Notes": "V19.1 action plan responds to machine slicers"},
+        {"From Table": "Fact_Score_Explanations", "From Column": "SALES MODEL", "To Table": "Dim_Machine", "To Column": "SALES MODEL", "Cardinality": "Many-to-one (*:1)", "Cross Filter Direction": "Single", "Active": "Yes", "Relationship Notes": "V19.1 score explanations respond to machine slicers"},
     ])], ignore_index=True)
     dax_starter = build_powerbi_dax_starter(cost_col)
 
@@ -3205,6 +3458,9 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Fact_Dealer_PartsLabor": fact_dealer_partslabor,
         "Fact_Region_PartsLabor": fact_region_partslabor,
         "Fact_Executive_Summary": fact_executive_summary,
+        "Fact_Executive_ActionPlan": fact_executive_action_plan,
+        "Fact_Executive_TopDrivers": fact_executive_top_drivers,
+        "Fact_Score_Explanations": fact_score_explanations,
         "Fact_Dealer_Performance": fact_dealer_performance,
         "Fact_Region_Performance": fact_region_performance,
         "Fact_Exception_Rows": fact_exceptions,
@@ -3241,6 +3497,8 @@ def build_powerbi_dataset_tables(analysis, scenario_name_value, export_reason_va
         "Sample_Workflow": build_sample_workflow_table(),
         "Version_History": build_version_history_table(),
         "Methodology_Snapshot": build_current_methodology_snapshot_table(),
+        "Score_Methodology": build_score_methodology_table(),
+        "PowerBI_V19_Page_Guidance": build_v19_powerbi_page_guidance_table(),
         "Known_Limitations": _clean_powerbi_columns(analysis.get("known_limitations", pd.DataFrame()).copy()),
         "Data_Dictionary": _clean_powerbi_columns(analysis.get("data_dictionary", pd.DataFrame()).copy()),
         "Parameters": _add_run_columns(analysis.get("parameter_summary", pd.DataFrame()).copy(), run_id, scenario_label),
@@ -3768,10 +4026,13 @@ def run_analysis(rebuild_file, rate_file):
     dealer_parts_labor = build_parts_labor_summary(valid, ["Dealer Code", "DEALER", "Region"])
     region_parts_labor = build_parts_labor_summary(valid, ["Region"])
     machine_insights = enrich_machine_insights_with_v19(machine_insights, machine_health_scores, machine_opportunity_ranking)
+    score_explanations = build_score_explanations(machine_health_scores, machine_opportunity_ranking)
+    executive_action_plan = build_executive_action_plan(machine_opportunity_ranking, machine_health_scores, machine_data_quality_scores, machine_parts_labor)
+    executive_top_drivers = build_executive_top_drivers(valid, df, cost_col, machine_opportunity_ranking, machine_health_scores, machine_parts_labor, dealer_parts_labor, region_parts_labor, machine_data_quality_scores)
     executive_summary_v19 = build_executive_summary_v19(valid, df, cost_col, machine_opportunity_ranking, machine_health_scores, machine_parts_labor, machine_data_quality_scores)
     executive_narrative = executive_summary_v19["Executive Summary"].tolist() if not executive_summary_v19.empty else build_executive_narrative(valid, summary, cost_col, int(df["Outlier"].sum()), int(df["Cross-Type Outlier Flag"].sum()), dealer_rate_coverage_summary, data_quality_score_summary, show_adjusted_cpth)
 
-    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int(df["Cross-Type Outlier Flag"].sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards, "global_ccr_type_summary": global_ccr_type_summary, "region_ccr_type_summary": region_ccr_type_summary, "machine_ccr_type_summary": machine_ccr_type_summary, "machine_group_ccr_type_summary": machine_group_ccr_type_summary, "machine_region_ccr_type_summary": machine_region_ccr_type_summary, "machine_year_ccr_type_summary": machine_year_ccr_type_summary, "region_year_ccr_type_summary": region_year_ccr_type_summary, "dealer_year_performance": dealer_year_performance, "machine_region_year_ccr_type_summary": machine_region_year_ccr_type_summary, "machine_insights": machine_insights, "machine_health_scores": machine_health_scores, "machine_opportunity_ranking": machine_opportunity_ranking, "machine_data_quality_scores": machine_data_quality_scores, "machine_parts_labor": machine_parts_labor, "dealer_parts_labor": dealer_parts_labor, "region_parts_labor": region_parts_labor, "executive_summary_v19": executive_summary_v19, "machine_grouping_lookup": machine_grouping_lookup, "filter_summary": build_filter_summary_table()}
+    return {"df": df, "valid": valid, "adjusted_valid": adjusted_valid, "summary": summary, "adjusted_summary": adjusted_summary, "cost_col": cost_col, "cpi_table": cpi_table, "cpi_source": cpi_source, "base_cpi": base_cpi, "fx_lookup": fx_lookup, "currency_col": currency_col, "rebuild_reference": rebuild_reference, "region_reference": region_reference, "metadata": metadata, "data_quality_summary": data_quality_summary, "outlier_count": int(df["Outlier"].sum()), "cross_count": int(df["Cross-Type Outlier Flag"].sum()), "dq_count": int(df["Data Quality Exception Flag"].eq("SMU 0 or 1").sum()), "insufficient_count": int(df["Insufficient Sample Group"].sum()), "global_year_fallback_count": int((df["Rate Source"] == "Global Yearly Fallback Rate").sum()), "overall_fallback_count": int((df["Rate Source"] == "Overall Average Fallback Rate").sum()), "rate_df": rate_df, "dealer_rate_validation": validate_dealer_rate_table(rate_df, start_year, end_year), "dealer_rate_exception_rows": df[df["Dealer Rate Exception Flag"] != ""].copy(), "rate_file_mode": rate_file_mode, "effective_fallback_behavior": effective_fallback_behavior, "dealer_rate_coverage_summary": dealer_rate_coverage_summary, "data_quality_score_summary": data_quality_score_summary, "run_readiness_summary": run_readiness_summary, "show_adjusted_cpth": show_adjusted_cpth, "machine_benchmark_ranking": machine_benchmark_ranking, "executive_narrative": executive_narrative, "parameter_summary": parameter_summary, "known_limitations": known_limitations, "data_dictionary": data_dictionary, "role_policy": role_policy, "performance_safeguards": performance_safeguards, "global_ccr_type_summary": global_ccr_type_summary, "region_ccr_type_summary": region_ccr_type_summary, "machine_ccr_type_summary": machine_ccr_type_summary, "machine_group_ccr_type_summary": machine_group_ccr_type_summary, "machine_region_ccr_type_summary": machine_region_ccr_type_summary, "machine_year_ccr_type_summary": machine_year_ccr_type_summary, "region_year_ccr_type_summary": region_year_ccr_type_summary, "dealer_year_performance": dealer_year_performance, "machine_region_year_ccr_type_summary": machine_region_year_ccr_type_summary, "machine_insights": machine_insights, "machine_health_scores": machine_health_scores, "machine_opportunity_ranking": machine_opportunity_ranking, "machine_data_quality_scores": machine_data_quality_scores, "machine_parts_labor": machine_parts_labor, "dealer_parts_labor": dealer_parts_labor, "region_parts_labor": region_parts_labor, "executive_summary_v19": executive_summary_v19, "executive_action_plan": executive_action_plan, "executive_top_drivers": executive_top_drivers, "score_explanations": score_explanations, "machine_grouping_lookup": machine_grouping_lookup, "filter_summary": build_filter_summary_table()}
 
 # =====================================================
 # RENDER RESULTS
@@ -3822,6 +4083,9 @@ if st.session_state.run_clicked and rebuild_file:
     dealer_parts_labor = analysis.get("dealer_parts_labor", pd.DataFrame())
     region_parts_labor = analysis.get("region_parts_labor", pd.DataFrame())
     executive_summary_v19 = analysis.get("executive_summary_v19", pd.DataFrame())
+    executive_action_plan = analysis.get("executive_action_plan", pd.DataFrame())
+    executive_top_drivers = analysis.get("executive_top_drivers", pd.DataFrame())
+    score_explanations = analysis.get("score_explanations", pd.DataFrame())
     executive_narrative = analysis.get("executive_narrative", [])
     parameter_summary = analysis.get("parameter_summary", pd.DataFrame())
     known_limitations = analysis.get("known_limitations", pd.DataFrame())
@@ -4058,10 +4322,20 @@ if st.session_state.run_clicked and rebuild_file:
         st.write("### Auto-Generated Executive Summary")
         if not executive_summary_v19.empty:
             display_table(executive_summary_v19, currency_cols=["Metric Value"], number_cols=["Order"])
+        st.write("### Executive Top Drivers")
+        display_table(executive_top_drivers, currency_cols=["Metric Value"], number_cols=["Metric Value"])
+        st.write("### Executive Action Plan")
+        display_table(executive_action_plan, currency_cols=["Metric Value"], number_cols=["Metric Value"])
+        st.write("### Score Methodology")
+        display_table(build_score_methodology_table())
+        st.write("### V19 Power BI Page Guidance")
+        display_table(build_v19_powerbi_page_guidance_table())
         st.write("### Machine Opportunity Ranking")
         display_table(machine_opportunity_ranking, currency_cols=["Avg_Cost"], percent_cols=["Outlier Rate %", "Dealer Rate Exception Rate %", "Vs Overall Avg %"], smu_cols=["Avg_SMU"], number_cols=["Valid_Rows", "Total_Rows", "Outlier_Rows", "Opportunity Score", "Opportunity Rank"])
         st.write("### Machine Health Scores")
-        display_table(machine_health_scores, percent_cols=["Cost Risk", "Outlier Risk", "Dealer Rate Risk", "Data Quality Risk"], number_cols=["Health Score", "Health Score Rank", "Data Quality Score"])
+        display_table(machine_health_scores, percent_cols=["Cost Risk", "Outlier Risk", "Dealer Rate Risk", "Data Quality Risk"], number_cols=["Health Score", "Health Score Rank", "Confidence Score", "Data Quality Score", "Cost Penalty", "Outlier Penalty", "Dealer Rate Penalty", "Cross-Type Penalty", "Data Quality Penalty"])
+        st.write("### Score Explanations")
+        display_table(score_explanations, number_cols=["Component Value", "Score Value"])
         st.write("### Parts vs Labor by Machine")
         display_table(machine_parts_labor, currency_cols=["Avg_Cost", "Avg_Parts_Cost", "Avg_Labor_Cost", "Total_Parts_Cost", "Total_Labor_Cost"], percent_cols=["Avg_Parts_Pct", "Avg_Labor_Pct"], number_cols=["Count"], decimal_cols=["Avg_Parts_to_Labor_Ratio"])
         st.write("### Machine Data Quality Scores")
