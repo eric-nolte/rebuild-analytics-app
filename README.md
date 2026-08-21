@@ -1,6 +1,6 @@
 # Rebuild Analytics Platform
 
-**Current app version:** V18.5 Final QA & Documentation Polish  
+**Current app version:** V19.1 
 **Primary downstream output:** Power BI Dataset Export  
 **Methodology version:** 2026.07-PowerBI-CrossType-Outlier-v18
 
